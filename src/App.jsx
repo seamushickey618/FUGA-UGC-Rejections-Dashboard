@@ -226,6 +226,57 @@ function parseRowsDetail(csvText, fallbackDate = null) {
   }
   return result
 }
+// ── Dispute & Content ID parsing ─────────────────────────────────────────
+function findColVal(row, names) {
+  const keys = Object.keys(row)
+  for (const name of names) {
+    const found = keys.find(k => k.trim().toLowerCase() === name.toLowerCase())
+    if (found !== undefined) return row[found]
+  }
+  return undefined
+}
+
+function parseDisputeStats(csvText, fallbackDate = null) {
+  let rows = []
+  Papa.parse(csvText, { header: true, skipEmptyLines: true, complete: r => { rows = r.data } })
+  const result = {}
+  for (const row of rows) {
+    const rawDate = row["Date"] || row["date"] || fallbackDate
+    if (!rawDate) continue
+    const d = parseDate(rawDate)
+    if (!d) continue
+    const upc    = String(row["Product UPC"]            || row["product upc"]            || "").trim()
+    const artist = String(row["Product Primary Artists"] || row["product primary artists"] || "").trim()
+    const title  = String(row["Product Title"]           || row["product title"]           || "").trim()
+    if (!upc && !artist && !title) continue
+    const wk = weekStart(d)
+    if (!result[wk]) result[wk] = { contentIdCount:0, verifiedArtists:0, disputed:0, accepted:0, redelivered:0, disputes:[] }
+    const entry = result[wk]
+
+    const monetisedVal = String(findColVal(row, ["Content ID Monetised ISRCs","Content ID Monetized ISRCs"]) ?? "").trim()
+    if (monetisedVal && monetisedVal !== "#N/A") {
+      const isrcs = monetisedVal.split("|").map(s => s.trim()).filter(s => ISRC_RE.test(s))
+      if (isrcs.length) entry.contentIdCount++
+    }
+
+    const verifiedVal = String(findColVal(row, ["Artists Verified by LANDR vLookup"]) ?? "").trim()
+    if (verifiedVal && verifiedVal !== "#N/A") entry.verifiedArtists++
+
+    const isDisputed  = String(findColVal(row, ["Disputed by LANDR"])          ?? "").trim().toLowerCase() === "yes"
+    const isAccepted  = String(findColVal(row, ["Dispute accepted by FUGA"])   ?? "").trim().toLowerCase() === "yes"
+    const isRedelivered = String(findColVal(row, ["Redelivered"])              ?? "").trim().toLowerCase() === "true"
+    if (isDisputed)   entry.disputed++
+    if (isAccepted)   entry.accepted++
+    if (isRedelivered) entry.redelivered++
+
+    const noteVal = String(findColVal(row, ["Dispute Notes"]) ?? "").trim()
+    if (isDisputed || isAccepted || noteVal) {
+      entry.disputes.push({ upc, artist, title, disputed:isDisputed, accepted:isAccepted, redelivered:isRedelivered, note:noteVal })
+    }
+  }
+  return result
+}
+
 function DateModal({ files, existingDates, onConfirm, onCancel }) {
   const [date,    setDate]    = useState(lastFriday)
   const [conflict, setConflict] = useState(false)
@@ -543,6 +594,26 @@ export default function App() {
     return all
   }, [processedFiles, tableWk])
 
+  const disputeWeekStats = useMemo(() => {
+    if (!tableWk || !processedFiles.length) return null
+    const combined = { contentIdCount:0, verifiedArtists:0, disputed:0, accepted:0, redelivered:0, disputes:[] }
+    for (const pf of processedFiles) {
+      if (!pf.csv_content) continue
+      const stats = parseDisputeStats(pf.csv_content, pf.manual_date ?? null)
+      if (!stats[tableWk]) continue
+      const s = stats[tableWk]
+      combined.contentIdCount  += s.contentIdCount
+      combined.verifiedArtists += s.verifiedArtists
+      combined.disputed        += s.disputed
+      combined.accepted        += s.accepted
+      combined.redelivered     += s.redelivered
+      combined.disputes.push(...s.disputes)
+    }
+    const hasData = combined.contentIdCount > 0 || combined.verifiedArtists > 0 ||
+                    combined.disputed > 0 || combined.accepted > 0 || combined.redelivered > 0
+    return hasData ? combined : null
+  }, [processedFiles, tableWk])
+
   const S = {
     app:   { minHeight:"100vh", background:"#080d17", fontFamily:"'DM Sans',sans-serif", color:"#e2e8f0" },
     card:  { background:"#0f172a", border:"1px solid #1e293b", borderRadius:12, padding:24 },
@@ -850,6 +921,99 @@ export default function App() {
                   No data for {fmtWeek(tableWk)}
                 </p>
               )}
+            </div>
+          )}
+
+          {/* Disputes & Content ID */}
+          {disputeWeekStats && (
+            <div style={S.card}>
+              <div style={{ marginBottom:20 }}>
+                <p style={{ ...S.label, marginBottom:4 }}>Disputes & Content ID — {fmtWeek(tableWk)}</p>
+                <p style={{ fontSize:12, color:"#334155" }}>
+                  Dispute workflow and Content ID monetisation summary for this week
+                </p>
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10, marginBottom:24 }}>
+                {[
+                  { label:"Content ID Monetised", value:disputeWeekStats.contentIdCount,
+                    hint:"Products with monetised ISRCs" },
+                  { label:"Artists Verified",      value:disputeWeekStats.verifiedArtists,
+                    hint:"Verified by LANDR vLookup" },
+                  { label:"Disputed by LANDR",     value:disputeWeekStats.disputed,
+                    hint:"Disputes raised this week" },
+                  { label:"Accepted by FUGA",      value:disputeWeekStats.accepted,
+                    hint:"Disputes accepted by FUGA" },
+                  { label:"Redelivered",           value:disputeWeekStats.redelivered,
+                    hint:"Products redelivered after dispute" },
+                  { label:"Acceptance Rate",
+                    value: disputeWeekStats.disputed > 0
+                      ? `${(disputeWeekStats.accepted / disputeWeekStats.disputed * 100).toFixed(0)}%`
+                      : "—",
+                    isText:true,
+                    hint:"Accepted ÷ disputed" },
+                ].map(({ label, value, isText, hint }) => (
+                  <div key={label} style={{ background:"#0a1120", borderRadius:10, padding:"14px 16px" }}>
+                    <p style={S.label}>{label}</p>
+                    <p style={{ fontSize:26, fontWeight:700, ...S.mono, color:"#f1f5f9",
+                      letterSpacing:"-0.02em", marginTop:6, marginBottom:4 }}>
+                      {isText ? value : fmtN(value)}
+                    </p>
+                    <p style={{ fontSize:11, color:"#334155" }}>{hint}</p>
+                  </div>
+                ))}
+              </div>
+
+              {disputeWeekStats.disputes.length > 0 && (<>
+                <p style={{ ...S.label, marginBottom:12 }}>Dispute details</p>
+                <div style={{ overflowX:"auto" }}>
+                  <table style={{ width:"100%", borderCollapse:"collapse", minWidth:560 }}>
+                    <thead>
+                      <tr style={{ borderBottom:"1px solid #1e293b" }}>
+                        {["UPC","Artist / Title","Status","Notes"].map(h => (
+                          <th key={h} style={{ ...S.label, textAlign:"left", padding:"0 10px 12px",
+                            fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {disputeWeekStats.disputes.map(({ upc, artist, title, disputed, accepted, redelivered, note }, i) => (
+                        <tr key={i} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
+                          <td style={{ padding:"11px 10px", fontSize:12, ...S.mono, color:"#94a3b8",
+                            whiteSpace:"nowrap", verticalAlign:"top" }}>{upc || "—"}</td>
+                          <td style={{ padding:"11px 10px", verticalAlign:"top", maxWidth:200 }}>
+                            <p style={{ fontSize:13, color:"#cbd5e1", fontWeight:500 }}>{artist || "—"}</p>
+                            {title && <p style={{ fontSize:11, color:"#475569", ...S.mono, marginTop:2 }}>{title}</p>}
+                          </td>
+                          <td style={{ padding:"11px 10px", verticalAlign:"top", whiteSpace:"nowrap" }}>
+                            <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                              {disputed && (
+                                <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4,
+                                  background:"rgba(245,158,11,0.12)", color:"#F59E0B",
+                                  border:"1px solid rgba(245,158,11,0.3)" }}>Disputed</span>
+                              )}
+                              {accepted && (
+                                <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4,
+                                  background:"rgba(34,197,94,0.12)", color:"#22C55E",
+                                  border:"1px solid rgba(34,197,94,0.3)" }}>Accepted</span>
+                              )}
+                              {redelivered && (
+                                <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4,
+                                  background:"rgba(59,130,246,0.12)", color:"#3B82F6",
+                                  border:"1px solid rgba(59,130,246,0.3)" }}>Redelivered</span>
+                              )}
+                            </div>
+                          </td>
+                          <td style={{ padding:"11px 10px", fontSize:12, color:"#94a3b8",
+                            verticalAlign:"top", lineHeight:1.6, maxWidth:300 }}>
+                            {note || <span style={{ color:"#334155" }}>—</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>)}
             </div>
           )}
 
