@@ -744,47 +744,54 @@ export default function App() {
 
         {hasData && tableWkStats && (<>
 
-          {/* Week selector */}
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-            <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-              <span style={S.label}>Viewing week</span>
+          {/* Week selector bar — inline stats */}
+          <div style={{ ...S.card, padding:"13px 20px", display:"flex", alignItems:"center", gap:20, flexWrap:"wrap" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <span style={S.label}>Week</span>
               <select
                 value={tableWk ?? ""}
                 onChange={e => setSelectedWk(e.target.value)}
                 style={{ background:"#0a1120", border:"1px solid #1e293b", borderRadius:8,
-                  padding:"7px 12px", fontSize:12, color:"#cbd5e1", cursor:"pointer",
+                  padding:"6px 12px", fontSize:12, color:"#cbd5e1", cursor:"pointer",
                   fontFamily:"'DM Mono',monospace", outline:"none", colorScheme:"dark" }}>
                 {[...sortedWeeks].reverse().map(wk => (
                   <option key={wk} value={wk}>{fmtWeek(wk)}{wk === latestWk ? " (latest)" : ""}</option>
                 ))}
               </select>
             </div>
-            <span style={{ fontSize:12, color:"#334155", ...S.mono }}>
-              {sortedWeeks.length} week{sortedWeeks.length !== 1 ? "s" : ""} loaded
+            <div style={{ width:1, height:26, background:"#1e293b", flexShrink:0 }} />
+            <div style={{ display:"flex", alignItems:"baseline", gap:8 }}>
+              <span style={{ fontSize:22, fontWeight:700, ...S.mono, color:"#f1f5f9", letterSpacing:"-0.02em" }}>
+                {fmtN(tableWkStats.totalRejections)}
+              </span>
+              <span style={{ fontSize:12, color:"#475569" }}>rejections</span>
+              <Delta curr={tableWkStats.totalRejections} prev={prevTableStats?.totalRejections} invert />
+            </div>
+            <div style={{ width:1, height:26, background:"#1e293b", flexShrink:0 }} />
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <span style={S.label}>Top issue</span>
+              <span style={{ fontSize:12, color:"#cbd5e1", fontWeight:600 }}>
+                {CAT_SHORT[Object.entries(tableWkStats.categories)
+                  .sort((a,b) => b[1].rejections - a[1].rejections)[0][0]]}
+              </span>
+            </div>
+            <span style={{ marginLeft:"auto", fontSize:11, color:"#334155", ...S.mono }}>
+              {sortedWeeks.length} wk{sortedWeeks.length !== 1 ? "s" : ""} · {fmtWeek(sortedWeeks[0])} – {fmtWeek(latestWk)}
             </span>
           </div>
 
-          {/* KPIs */}
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:12 }}>
-            <div style={{ ...S.card, padding:20 }}>
-              <p style={S.label}>Rejections</p>
-              <p style={{ fontSize:28, fontWeight:700, color:"#f1f5f9", marginTop:8, marginBottom:6,
-                ...S.mono, letterSpacing:"-0.02em" }}>{fmtN(tableWkStats.totalRejections)}</p>
-              <Delta curr={tableWkStats.totalRejections} prev={prevTableStats?.totalRejections} invert />
-            </div>
-            <div style={{ ...S.card, padding:20 }}>
-              <p style={S.label}>Top Category</p>
-              <p style={{ fontSize:28, fontWeight:700, color:"#f1f5f9", marginTop:8, marginBottom:6,
-                ...S.mono, letterSpacing:"-0.02em" }}>
-                {CAT_SHORT[Object.entries(tableWkStats.categories)
-                  .sort((a,b) => b[1].rejections - a[1].rejections)[0][0]]}
-              </p>
-            </div>
+          {/* ── Rejection Analysis ───────────────────────── */}
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <div style={{ width:3, height:14, borderRadius:2, background:"#3B82F6", flexShrink:0 }} />
+            <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", color:"#3B82F6" }}>
+              Rejection Analysis
+            </span>
+            <div style={{ flex:1, height:1, background:"#1e293b" }} />
           </div>
 
           {/* Category tiles */}
           <div style={S.card}>
-            <p style={{ ...S.label, marginBottom:16 }}>Week breakdown — {fmtWeek(tableWk)}</p>
+            <p style={{ ...S.label, marginBottom:14 }}>Issue categories — {fmtWeek(tableWk)}</p>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10 }}>
               {CATEGORIES.filter(c => tableWkStats.categories[c]?.rejections > 0)
                 .sort((a,b) => tableWkStats.categories[b].rejections - tableWkStats.categories[a].rejections)
@@ -792,10 +799,11 @@ export default function App() {
                   const { rejections } = tableWkStats.categories[c]
                   const pct = (rejections / tableWkStats.totalRejections * 100).toFixed(1)
                   return (
-                    <div key={c} style={{ background:"#0a1120", borderRadius:10, padding:"14px 16px",
+                    <div key={c} style={{ background:"#0a1120", borderRadius:8, padding:"12px 14px",
                       borderLeft:`3px solid ${CAT_COLORS[c]}` }}>
-                      <p style={{ ...S.label, color:CAT_COLORS[c], marginBottom:6 }}>{CAT_SHORT[c]}</p>
-                      <p style={{ fontSize:26, fontWeight:700, ...S.mono, color:"#f1f5f9", letterSpacing:"-0.02em" }}>
+                      <p style={{ fontSize:10, fontWeight:700, letterSpacing:"0.07em", textTransform:"uppercase",
+                        color:CAT_COLORS[c], marginBottom:5 }}>{CAT_SHORT[c]}</p>
+                      <p style={{ fontSize:24, fontWeight:700, ...S.mono, color:"#f1f5f9", letterSpacing:"-0.02em" }}>
                         {rejections}
                       </p>
                       <p style={{ fontSize:11, color:"#475569", marginTop:2, ...S.mono }}>{pct}%</p>
@@ -807,11 +815,10 @@ export default function App() {
 
           {sortedWeeks.length > 1 && (<>
 
-            {/* Rejections per week */}
+            {/* Rejections per week chart */}
             <div style={S.card}>
-              <p style={{ ...S.label, marginBottom:4 }}>Rejections per week</p>
-              <p style={{ fontSize:12, color:"#334155", marginBottom:20 }}>Distinct products rejected</p>
-              <ResponsiveContainer width="100%" height={200}>
+              <p style={{ ...S.label, marginBottom:14 }}>Rejections per week</p>
+              <ResponsiveContainer width="100%" height={160}>
                 <LineChart data={chartData} margin={{ top:0, right:8, left:-20, bottom:0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                   <XAxis dataKey="week" tick={{ fontSize:10, fill:"#475569", fontFamily:"DM Mono" }} />
@@ -823,14 +830,249 @@ export default function App() {
               </ResponsiveContainer>
             </div>
 
-            {/* Disputes & Content ID over time */}
-            {hasDisputeChartData && (
-              <div style={S.card}>
-                <p style={{ ...S.label, marginBottom:4 }}>Disputes & Content ID over time</p>
-                <p style={{ fontSize:12, color:"#334155", marginBottom:20 }}>
-                  Content ID monetised, disputes raised, and disputes accepted — week over week
+            {/* Category breakdown table */}
+            <div style={S.card}>
+              <p style={{ ...S.label, marginBottom:4 }}>Category breakdown — all time</p>
+              <p style={{ fontSize:11, color:"#334155", marginBottom:14, ...S.mono }}>
+                This week = {fmtWeek(tableWk)}{prevTableWk ? ` · vs ${fmtWeek(prevTableWk)}` : ""}
+              </p>
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom:"1px solid #1e293b" }}>
+                      {["Category","Total","Avg / wk","Max","This week","vs last wk"].map((h, i) => (
+                        <th key={h} style={{ ...S.label, textAlign:i===0?"left":"right",
+                          padding:"0 10px 10px", fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {categoryTableData.map(({ c, total, avg, maxVal, maxWk, thisWk, prevVal, pct }) => (
+                      <tr key={c} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
+                        <td style={{ padding:"10px 10px" }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                            <div style={{ width:8, height:8, borderRadius:"50%", background:CAT_COLORS[c], flexShrink:0 }} />
+                            <span style={{ fontSize:12, color:"#cbd5e1" }}>{CAT_SHORT[c]}</span>
+                          </div>
+                        </td>
+                        <td style={{ textAlign:"right", padding:"10px 10px", fontSize:13, fontWeight:600, ...S.mono, color:"#f1f5f9" }}>
+                          {fmtN(total)}
+                        </td>
+                        <td style={{ textAlign:"right", padding:"10px 10px", fontSize:12, ...S.mono, color:"#64748b" }}>
+                          {avg.toFixed(1)}
+                        </td>
+                        <td style={{ textAlign:"right", padding:"10px 10px", ...S.mono }}>
+                          <span style={{ fontSize:12, color:"#f1f5f9", fontWeight:600 }}>{fmtN(maxVal)}</span>
+                          <span style={{ fontSize:10, color:"#334155", display:"block" }}>{fmtWeek(maxWk)}</span>
+                        </td>
+                        <td style={{ textAlign:"right", padding:"10px 10px", fontSize:13, fontWeight:600, ...S.mono, color:"#f1f5f9" }}>
+                          {fmtN(thisWk)}
+                        </td>
+                        <td style={{ textAlign:"right", padding:"10px 10px" }}>
+                          {prevTableWk == null
+                            ? <span style={{ fontSize:11, color:"#334155", ...S.mono }}>—</span>
+                            : pct === null
+                              ? <span style={{ fontSize:11, color:"#475569", ...S.mono }}>
+                                  {thisWk > 0 && prevVal === 0 ? "new" : "—"}
+                                </span>
+                              : <span style={{ display:"inline-flex", alignItems:"center", gap:3, fontSize:11,
+                                  fontWeight:600, ...S.mono,
+                                  color: pct > 0 ? "#f87171" : pct < 0 ? "#4ade80" : "#64748b",
+                                  background: pct > 0 ? "rgba(248,113,113,.12)" : pct < 0 ? "rgba(74,222,128,.12)" : "transparent",
+                                  padding:"2px 7px", borderRadius:4 }}>
+                                  {pct > 0 ? "↑" : pct < 0 ? "↓" : ""} {Math.abs(pct).toFixed(1)}%
+                                </span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </>)}
+
+          {/* UPC / ISRC breakdown — collapsible */}
+          <div style={S.card}>
+            <button
+              onClick={() => setUpcExpanded(x => !x)}
+              style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between",
+                background:"transparent", border:"none", cursor:"pointer", padding:0, textAlign:"left" }}>
+              <div>
+                <p style={{ ...S.label, marginBottom:3 }}>UPC / ISRC breakdown — {fmtWeek(tableWk)}</p>
+                <p style={{ fontSize:11, color:"#334155" }}>
+                  {latestWeekRows.length} rejected products · click to {upcExpanded ? "collapse" : "expand"}
                 </p>
-                <ResponsiveContainer width="100%" height={200}>
+              </div>
+              <span style={{ fontSize:20, color:"#475569", lineHeight:1,
+                transform:upcExpanded ? "rotate(180deg)" : "rotate(0deg)", transition:"transform 0.2s" }}>⌄</span>
+            </button>
+            {upcExpanded && (
+              <div style={{ marginTop:18, overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", minWidth:560 }}>
+                  <thead>
+                    <tr style={{ borderBottom:"1px solid #1e293b" }}>
+                      {["UPC","ISRC(s)","Issue Types (Product / Asset)"].map(h => (
+                        <th key={h} style={{ ...S.label, textAlign:"left", padding:"0 10px 10px",
+                          fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {latestWeekRows.map(({ upc, isrcs, prodCats, assetCats }, i) => (
+                      <tr key={i} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
+                        <td style={{ padding:"10px 10px", fontSize:12, ...S.mono, color:"#94a3b8",
+                          whiteSpace:"nowrap", verticalAlign:"top" }}>{upc || "—"}</td>
+                        <td style={{ padding:"10px 10px", verticalAlign:"top", maxWidth:200 }}>
+                          {isrcs.length
+                            ? <span style={{ fontSize:11, ...S.mono, color:"#64748b", lineHeight:1.7 }}>{isrcs.join(", ")}</span>
+                            : <span style={{ fontSize:11, color:"#334155" }}>—</span>}
+                        </td>
+                        <td style={{ padding:"10px 10px", verticalAlign:"top" }}>
+                          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                            {prodCats.length > 0 && (
+                              <div style={{ display:"flex", alignItems:"flex-start", gap:6, flexWrap:"wrap" }}>
+                                <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase",
+                                  color:"#475569", paddingTop:3, whiteSpace:"nowrap", flexShrink:0 }}>Product</span>
+                                <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
+                                  {prodCats.map(c => (
+                                    <span key={c} style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
+                                      background:`${CAT_COLORS[c]}18`, color:CAT_COLORS[c],
+                                      border:`1px solid ${CAT_COLORS[c]}40` }}>{CAT_SHORT[c]}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {assetCats.length > 0 && (
+                              <div style={{ display:"flex", alignItems:"flex-start", gap:6, flexWrap:"wrap" }}>
+                                <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase",
+                                  color:"#475569", paddingTop:3, whiteSpace:"nowrap", flexShrink:0 }}>Asset</span>
+                                <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
+                                  {assetCats.map(c => (
+                                    <span key={c} style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
+                                      background:`${CAT_COLORS[c]}18`, color:CAT_COLORS[c],
+                                      border:`1px solid ${CAT_COLORS[c]}40` }}>{CAT_SHORT[c]}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {latestWeekRows.length === 0 && (
+                  <p style={{ fontSize:13, color:"#334155", textAlign:"center", padding:"28px 0" }}>
+                    No data for {fmtWeek(tableWk)}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ── Dispute Management ──────────────────────── */}
+          {disputeWeekStats && (<>
+
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <div style={{ width:3, height:14, borderRadius:2, background:"#F59E0B", flexShrink:0 }} />
+              <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", color:"#F59E0B" }}>
+                Dispute Management
+              </span>
+              <div style={{ flex:1, height:1, background:"#1e293b" }} />
+            </div>
+
+            {/* Dispute KPI tiles + collapsible detail */}
+            <div style={{ ...S.card, borderColor:"rgba(245,158,11,0.2)" }}>
+              <p style={{ ...S.label, marginBottom:14 }}>Dispute summary — {fmtWeek(tableWk)}</p>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10,
+                marginBottom: disputeWeekStats.disputes.length > 0 ? 16 : 0 }}>
+                {[
+                  { label:"Content ID Monetised", value:disputeWeekStats.contentIdCount,   hint:"Products with monetised ISRCs" },
+                  { label:"Artists Verified",      value:disputeWeekStats.verifiedArtists,  hint:"Verified by LANDR vLookup" },
+                  { label:"Disputed by LANDR",     value:disputeWeekStats.disputed,         hint:"Disputes raised this week" },
+                  { label:"Accepted by FUGA",      value:disputeWeekStats.accepted,         hint:"Disputes accepted by FUGA" },
+                  { label:"Redelivered",           value:disputeWeekStats.redelivered,      hint:"Redelivered after dispute" },
+                  { label:"Acceptance Rate",
+                    value: disputeWeekStats.disputed > 0
+                      ? `${(disputeWeekStats.accepted / disputeWeekStats.disputed * 100).toFixed(0)}%` : "—",
+                    isText:true, hint:"Accepted ÷ disputed" },
+                  { label:"Accepted / Monetised",
+                    value: disputeWeekStats.contentIdCount > 0
+                      ? `${(disputeWeekStats.accepted / disputeWeekStats.contentIdCount * 100).toFixed(0)}%` : "—",
+                    isText:true, hint:"Accepted ÷ Content ID monetised" },
+                ].map(({ label, value, isText, hint }) => (
+                  <div key={label} style={{ background:"#0a1120", borderRadius:8, padding:"12px 14px" }}>
+                    <p style={{ fontSize:10, fontWeight:700, letterSpacing:"0.07em", textTransform:"uppercase",
+                      color:"#475569", marginBottom:4 }}>{label}</p>
+                    <p style={{ fontSize:21, fontWeight:700, ...S.mono, color:"#f1f5f9",
+                      letterSpacing:"-0.02em", marginBottom:3 }}>
+                      {isText ? value : fmtN(value)}
+                    </p>
+                    <p style={{ fontSize:10, color:"#334155" }}>{hint}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Dispute details — collapsible */}
+              {disputeWeekStats.disputes.length > 0 && (<>
+                <button
+                  onClick={() => setDisputeExpanded(x => !x)}
+                  style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between",
+                    background:"transparent", border:"none", borderTop:"1px solid #1e293b",
+                    cursor:"pointer", padding:"12px 0 0", textAlign:"left" }}>
+                  <p style={S.label}>Dispute details ({disputeWeekStats.disputes.length})</p>
+                  <span style={{ fontSize:20, color:"#475569", lineHeight:1,
+                    transform:disputeExpanded ? "rotate(180deg)" : "rotate(0deg)", transition:"transform 0.2s" }}>⌄</span>
+                </button>
+                {disputeExpanded && (
+                  <div style={{ marginTop:14, overflowX:"auto" }}>
+                    <table style={{ width:"100%", borderCollapse:"collapse", minWidth:560 }}>
+                      <thead>
+                        <tr style={{ borderBottom:"1px solid #1e293b" }}>
+                          {["UPC","Artist / Title","Status","Notes"].map(h => (
+                            <th key={h} style={{ ...S.label, textAlign:"left", padding:"0 10px 10px",
+                              fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {disputeWeekStats.disputes.map(({ upc, artist, title, disputed, accepted, redelivered, note }, i) => (
+                          <tr key={i} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
+                            <td style={{ padding:"10px 10px", fontSize:12, ...S.mono, color:"#94a3b8",
+                              whiteSpace:"nowrap", verticalAlign:"top" }}>{upc || "—"}</td>
+                            <td style={{ padding:"10px 10px", verticalAlign:"top", maxWidth:200 }}>
+                              <p style={{ fontSize:13, color:"#cbd5e1", fontWeight:500 }}>{artist || "—"}</p>
+                              {title && <p style={{ fontSize:11, color:"#475569", ...S.mono, marginTop:2 }}>{title}</p>}
+                            </td>
+                            <td style={{ padding:"10px 10px", verticalAlign:"top", whiteSpace:"nowrap" }}>
+                              <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                                {disputed    && <span style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
+                                  background:"rgba(245,158,11,0.12)", color:"#F59E0B", border:"1px solid rgba(245,158,11,0.3)" }}>Disputed</span>}
+                                {accepted    && <span style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
+                                  background:"rgba(34,197,94,0.12)",  color:"#22C55E", border:"1px solid rgba(34,197,94,0.3)"  }}>Accepted</span>}
+                                {redelivered && <span style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
+                                  background:"rgba(59,130,246,0.12)", color:"#3B82F6", border:"1px solid rgba(59,130,246,0.3)" }}>Redelivered</span>}
+                              </div>
+                            </td>
+                            <td style={{ padding:"10px 10px", fontSize:12, color:"#94a3b8",
+                              verticalAlign:"top", lineHeight:1.6, maxWidth:300 }}>
+                              {note || <span style={{ color:"#334155" }}>—</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>)}
+            </div>
+
+            {/* Disputes & Content ID over time */}
+            {hasDisputeChartData && sortedWeeks.length > 1 && (
+              <div style={{ ...S.card, borderColor:"rgba(245,158,11,0.2)" }}>
+                <p style={{ ...S.label, marginBottom:14 }}>Disputes & Content ID over time</p>
+                <ResponsiveContainer width="100%" height={160}>
                   <LineChart data={disputeChartData} margin={{ top:0, right:8, left:-20, bottom:0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                     <XAxis dataKey="week" tick={{ fontSize:10, fill:"#475569", fontFamily:"DM Mono" }} />
@@ -847,285 +1089,50 @@ export default function App() {
 
           </>)}
 
-          {/* UPC / ISRC breakdown — collapsible */}
-          <div style={S.card}>
-            <button
-              onClick={() => setUpcExpanded(x => !x)}
-              style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between",
-                background:"transparent", border:"none", cursor:"pointer", padding:0, textAlign:"left" }}>
-              <div>
-                <p style={{ ...S.label, marginBottom:4 }}>UPC / ISRC breakdown</p>
-                <p style={{ fontSize:12, color:"#334155" }}>
-                  {fmtWeek(tableWk)} · {latestWeekRows.length} rejected products — click to {upcExpanded ? "collapse" : "expand"}
-                </p>
-              </div>
-              <span style={{ fontSize:20, color:"#475569", lineHeight:1,
-                transform:upcExpanded ? "rotate(180deg)" : "rotate(0deg)", transition:"transform 0.2s" }}>⌄</span>
-            </button>
-            {upcExpanded && (
-              <div style={{ marginTop:20, overflowX:"auto" }}>
-                <table style={{ width:"100%", borderCollapse:"collapse", minWidth:560 }}>
-                  <thead>
-                    <tr style={{ borderBottom:"1px solid #1e293b" }}>
-                      {["UPC","ISRC(s)","Issue Types (Product / Asset)"].map(h => (
-                        <th key={h} style={{ ...S.label, textAlign:"left", padding:"0 10px 12px",
-                          fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {latestWeekRows.map(({ upc, isrcs, prodCats, assetCats }, i) => (
-                      <tr key={i} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
-                        <td style={{ padding:"11px 10px", fontSize:12, ...S.mono, color:"#94a3b8",
-                          whiteSpace:"nowrap", verticalAlign:"top" }}>{upc || "—"}</td>
-                        <td style={{ padding:"11px 10px", verticalAlign:"top", maxWidth:220 }}>
-                          {isrcs.length
-                            ? <span style={{ fontSize:11, ...S.mono, color:"#64748b", lineHeight:1.7 }}>{isrcs.join(", ")}</span>
-                            : <span style={{ fontSize:11, color:"#334155" }}>—</span>}
-                        </td>
-                        <td style={{ padding:"11px 10px", verticalAlign:"top" }}>
-                          <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
-                            {prodCats.length > 0 && (
-                              <div style={{ display:"flex", alignItems:"flex-start", gap:6, flexWrap:"wrap" }}>
-                                <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase",
-                                  color:"#475569", paddingTop:3, whiteSpace:"nowrap", flexShrink:0 }}>Product</span>
-                                <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
-                                  {prodCats.map(c => (
-                                    <span key={c} style={{ fontSize:11, fontWeight:600, padding:"3px 8px", borderRadius:5,
-                                      background:`${CAT_COLORS[c]}18`, color:CAT_COLORS[c],
-                                      border:`1px solid ${CAT_COLORS[c]}40`, fontFamily:"'DM Sans',sans-serif",
-                                      whiteSpace:"nowrap" }}>{CAT_SHORT[c]}</span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            {assetCats.length > 0 && (
-                              <div style={{ display:"flex", alignItems:"flex-start", gap:6, flexWrap:"wrap" }}>
-                                <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase",
-                                  color:"#475569", paddingTop:3, whiteSpace:"nowrap", flexShrink:0 }}>Asset</span>
-                                <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
-                                  {assetCats.map(c => (
-                                    <span key={c} style={{ fontSize:11, fontWeight:600, padding:"3px 8px", borderRadius:5,
-                                      background:`${CAT_COLORS[c]}18`, color:CAT_COLORS[c],
-                                      border:`1px solid ${CAT_COLORS[c]}40`, fontFamily:"'DM Sans',sans-serif",
-                                      whiteSpace:"nowrap" }}>{CAT_SHORT[c]}</span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {latestWeekRows.length === 0 && (
-                  <p style={{ fontSize:13, color:"#334155", textAlign:"center", padding:"32px 0" }}>
-                    No data for {fmtWeek(tableWk)}
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Disputes & Content ID */}
-          {disputeWeekStats && (
-            <div style={S.card}>
-              <div style={{ marginBottom:20 }}>
-                <p style={{ ...S.label, marginBottom:4 }}>Disputes & Content ID — {fmtWeek(tableWk)}</p>
-                <p style={{ fontSize:12, color:"#334155" }}>
-                  Dispute workflow and Content ID monetisation summary for this week
-                </p>
-              </div>
-
-              {/* KPI tiles — always visible */}
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10,
-                marginBottom: disputeWeekStats.disputes.length > 0 ? 20 : 0 }}>
-                {[
-                  { label:"Content ID Monetised", value:disputeWeekStats.contentIdCount,      hint:"Products with monetised ISRCs" },
-                  { label:"Artists Verified",      value:disputeWeekStats.verifiedArtists,    hint:"Verified by LANDR vLookup" },
-                  { label:"Disputed by LANDR",     value:disputeWeekStats.disputed,           hint:"Disputes raised this week" },
-                  { label:"Accepted by FUGA",      value:disputeWeekStats.accepted,           hint:"Disputes accepted by FUGA" },
-                  { label:"Redelivered",           value:disputeWeekStats.redelivered,        hint:"Products redelivered after dispute" },
-                  { label:"Acceptance Rate",
-                    value: disputeWeekStats.disputed > 0
-                      ? `${(disputeWeekStats.accepted / disputeWeekStats.disputed * 100).toFixed(0)}%` : "—",
-                    isText:true, hint:"Accepted ÷ disputed" },
-                  { label:"Accepted / Monetised",
-                    value: disputeWeekStats.contentIdCount > 0
-                      ? `${(disputeWeekStats.accepted / disputeWeekStats.contentIdCount * 100).toFixed(0)}%` : "—",
-                    isText:true, hint:"Accepted ÷ Content ID monetised" },
-                ].map(({ label, value, isText, hint }) => (
-                  <div key={label} style={{ background:"#0a1120", borderRadius:10, padding:"14px 16px" }}>
-                    <p style={S.label}>{label}</p>
-                    <p style={{ fontSize:22, fontWeight:700, ...S.mono, color:"#f1f5f9",
-                      letterSpacing:"-0.02em", marginTop:6, marginBottom:4 }}>
-                      {isText ? value : fmtN(value)}
-                    </p>
-                    <p style={{ fontSize:11, color:"#334155" }}>{hint}</p>
-                  </div>
-                ))}
-              </div>
-
-              {/* Dispute details — collapsible */}
-              {disputeWeekStats.disputes.length > 0 && (<>
-                <button
-                  onClick={() => setDisputeExpanded(x => !x)}
-                  style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between",
-                    background:"transparent", border:"none", borderTop:"1px solid #1e293b",
-                    cursor:"pointer", padding:"14px 0 0", textAlign:"left" }}>
-                  <p style={S.label}>Dispute details ({disputeWeekStats.disputes.length})</p>
-                  <span style={{ fontSize:20, color:"#475569", lineHeight:1,
-                    transform:disputeExpanded ? "rotate(180deg)" : "rotate(0deg)", transition:"transform 0.2s" }}>⌄</span>
-                </button>
-                {disputeExpanded && (
-                  <div style={{ marginTop:16, overflowX:"auto" }}>
-                    <table style={{ width:"100%", borderCollapse:"collapse", minWidth:560 }}>
-                      <thead>
-                        <tr style={{ borderBottom:"1px solid #1e293b" }}>
-                          {["UPC","Artist / Title","Status","Notes"].map(h => (
-                            <th key={h} style={{ ...S.label, textAlign:"left", padding:"0 10px 12px",
-                              fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {disputeWeekStats.disputes.map(({ upc, artist, title, disputed, accepted, redelivered, note }, i) => (
-                          <tr key={i} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
-                            <td style={{ padding:"11px 10px", fontSize:12, ...S.mono, color:"#94a3b8",
-                              whiteSpace:"nowrap", verticalAlign:"top" }}>{upc || "—"}</td>
-                            <td style={{ padding:"11px 10px", verticalAlign:"top", maxWidth:200 }}>
-                              <p style={{ fontSize:13, color:"#cbd5e1", fontWeight:500 }}>{artist || "—"}</p>
-                              {title && <p style={{ fontSize:11, color:"#475569", ...S.mono, marginTop:2 }}>{title}</p>}
-                            </td>
-                            <td style={{ padding:"11px 10px", verticalAlign:"top", whiteSpace:"nowrap" }}>
-                              <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-                                {disputed   && <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4,
-                                  background:"rgba(245,158,11,0.12)", color:"#F59E0B", border:"1px solid rgba(245,158,11,0.3)" }}>Disputed</span>}
-                                {accepted   && <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4,
-                                  background:"rgba(34,197,94,0.12)",  color:"#22C55E", border:"1px solid rgba(34,197,94,0.3)"  }}>Accepted</span>}
-                                {redelivered && <span style={{ fontSize:11, fontWeight:600, padding:"2px 8px", borderRadius:4,
-                                  background:"rgba(59,130,246,0.12)", color:"#3B82F6", border:"1px solid rgba(59,130,246,0.3)" }}>Redelivered</span>}
-                              </div>
-                            </td>
-                            <td style={{ padding:"11px 10px", fontSize:12, color:"#94a3b8",
-                              verticalAlign:"top", lineHeight:1.6, maxWidth:300 }}>
-                              {note || <span style={{ color:"#334155" }}>—</span>}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </>)}
-            </div>
-          )}
-
-          {/* Category breakdown table */}
-          <div style={S.card}>
-            <p style={{ ...S.label, marginBottom:4 }}>Category breakdown</p>
-            <p style={{ fontSize:12, color:"#334155", marginBottom:20 }}>
-              All-time totals · This week = {fmtWeek(tableWk)}{prevTableWk ? ` · vs ${fmtWeek(prevTableWk)}` : ""}
-            </p>
-            <div style={{ overflowX:"auto" }}>
-              <table style={{ width:"100%", borderCollapse:"collapse" }}>
-                <thead>
-                  <tr style={{ borderBottom:"1px solid #1e293b" }}>
-                    {["Category","Total","Avg / wk","Max","This week","vs last week"].map((h, i) => (
-                      <th key={h} style={{ ...S.label, textAlign:i===0?"left":"right",
-                        padding:"0 10px 12px", fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {categoryTableData.map(({ c, total, avg, maxVal, maxWk, thisWk, prevVal, pct }) => (
-                    <tr key={c} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
-                      <td style={{ padding:"12px 10px" }}>
-                        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                          <div style={{ width:8, height:8, borderRadius:"50%", background:CAT_COLORS[c], flexShrink:0 }} />
-                          <span style={{ fontSize:13, color:"#cbd5e1" }}>{c}</span>
-                        </div>
-                      </td>
-                      <td style={{ textAlign:"right", padding:"12px 10px", fontSize:13, fontWeight:600, ...S.mono, color:"#f1f5f9" }}>
-                        {fmtN(total)}
-                      </td>
-                      <td style={{ textAlign:"right", padding:"12px 10px", fontSize:13, ...S.mono, color:"#64748b" }}>
-                        {avg.toFixed(1)}
-                      </td>
-                      <td style={{ textAlign:"right", padding:"12px 10px", ...S.mono }}>
-                        <span style={{ fontSize:13, color:"#f1f5f9", fontWeight:600 }}>{fmtN(maxVal)}</span>
-                        <span style={{ fontSize:11, color:"#334155", display:"block" }}>{fmtWeek(maxWk)}</span>
-                      </td>
-                      <td style={{ textAlign:"right", padding:"12px 10px", fontSize:13, fontWeight:600, ...S.mono, color:"#f1f5f9" }}>
-                        {fmtN(thisWk)}
-                      </td>
-                      <td style={{ textAlign:"right", padding:"12px 10px" }}>
-                        {prevTableWk == null
-                          ? <span style={{ fontSize:12, color:"#334155", ...S.mono }}>—</span>
-                          : pct === null
-                            ? <span style={{ fontSize:12, color:"#475569", ...S.mono }}>
-                                {thisWk > 0 && prevVal === 0 ? "new" : "—"}
-                              </span>
-                            : <span style={{ display:"inline-flex", alignItems:"center", gap:3, fontSize:11,
-                                fontWeight:600, ...S.mono,
-                                color: pct > 0 ? "#f87171" : pct < 0 ? "#4ade80" : "#64748b",
-                                background: pct > 0 ? "rgba(248,113,113,.12)" : pct < 0 ? "rgba(74,222,128,.12)" : "transparent",
-                                padding:"2px 7px", borderRadius:4 }}>
-                                {pct > 0 ? "↑" : pct < 0 ? "↓" : ""} {Math.abs(pct).toFixed(1)}%
-                              </span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
           {/* Upload history */}
           {processedFiles.length > 0 && (
             <div style={S.card}>
-              <p style={{ ...S.label, marginBottom:16 }}>Upload history</p>
+              <p style={{ ...S.label, marginBottom:14 }}>Upload history</p>
               <div style={{ display:"flex", flexDirection:"column" }}>
                 {[...processedFiles].reverse().map((f, i) => (
                   <div key={i} className="row-hover" style={{ display:"flex", alignItems:"center",
-                    justifyContent:"space-between", padding:"11px 8px", borderBottom:"1px solid #0f172a" }}>
+                    justifyContent:"space-between", padding:"10px 8px", borderBottom:"1px solid #0f172a" }}>
                     <div style={{ display:"flex", alignItems:"center", gap:10, minWidth:0 }}>
                       <svg width="14" height="14" fill="none" stroke="#334155" strokeWidth="1.5" viewBox="0 0 24 24" style={{ flexShrink:0 }}>
                         <path strokeLinecap="round" strokeLinejoin="round"
                           d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                       </svg>
-                      <span style={{ fontSize:13, color:"#94a3b8", fontWeight:500, overflow:"hidden",
+                      <span style={{ fontSize:12, color:"#94a3b8", fontWeight:500, overflow:"hidden",
                         textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{f.name}</span>
-                      <span style={{ fontSize:12, color:"#334155", ...S.mono, flexShrink:0 }}>
+                      <span style={{ fontSize:11, color:"#334155", ...S.mono, flexShrink:0 }}>
                         {f.manual_date ? `${fmtDate(f.manual_date)} report` : f.date_range}
                       </span>
                     </div>
-                    <div style={{ display:"flex", alignItems:"center", gap:12, flexShrink:0 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
                       <span style={{ fontSize:11, color:"#334155", ...S.mono }}>
                         {fmtN(f.rows)} rows · {new Date(f.uploaded_at).toLocaleDateString()}
                       </span>
                       <div style={{ display:"flex", gap:6 }}>
                         {f.csv_content && (
                           <button className="dl-btn" onClick={() => handleDownload(f)} style={{
-                            display:"flex", alignItems:"center", gap:5, fontSize:11, color:"#3B82F6",
+                            display:"flex", alignItems:"center", gap:4, fontSize:11, color:"#3B82F6",
                             background:"rgba(59,130,246,0.08)", border:"1px solid rgba(59,130,246,0.2)",
-                            padding:"4px 10px", borderRadius:6, cursor:"pointer",
+                            padding:"3px 9px", borderRadius:5, cursor:"pointer",
                             fontFamily:"'DM Sans',sans-serif", transition:"all 0.15s", whiteSpace:"nowrap"
                           }}>
-                            <svg width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                            <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
                             </svg>
                             Download
                           </button>
                         )}
                         <button onClick={() => handleDeleteFile(f)} style={{
-                          display:"flex", alignItems:"center", gap:5, fontSize:11, color:"#ef4444",
+                          display:"flex", alignItems:"center", gap:4, fontSize:11, color:"#ef4444",
                           background:"rgba(239,68,68,0.08)", border:"1px solid rgba(239,68,68,0.2)",
-                          padding:"4px 10px", borderRadius:6, cursor:"pointer",
+                          padding:"3px 9px", borderRadius:5, cursor:"pointer",
                           fontFamily:"'DM Sans',sans-serif", transition:"all 0.15s", whiteSpace:"nowrap"
                         }}>
-                          <svg width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                          <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                           </svg>
                           Remove
