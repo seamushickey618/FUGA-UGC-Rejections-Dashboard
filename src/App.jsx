@@ -262,14 +262,16 @@ function parseDisputeStats(csvText, fallbackDate = null) {
     const verifiedVal = String(findColVal(row, ["Artists Verified by LANDR vLookup"]) ?? "").trim()
     if (verifiedVal && verifiedVal !== "#N/A") entry.verifiedArtists++
 
-    const isDisputed  = String(findColVal(row, ["Disputed by LANDR"])          ?? "").trim().toLowerCase() === "yes"
-    const isAccepted  = String(findColVal(row, ["Dispute accepted by FUGA"])   ?? "").trim().toLowerCase() === "yes"
+    const disputedRaw   = String(findColVal(row, ["Disputed by LANDR"])        ?? "").trim().toLowerCase()
+    const acceptedRaw   = String(findColVal(row, ["Dispute accepted by FUGA"]) ?? "").trim().toLowerCase()
+    const isDisputed    = disputedRaw === "yes" || disputedRaw === "true"
+    const isAccepted    = acceptedRaw === "yes" || acceptedRaw === "true"
     const isRedelivered = String(findColVal(row, ["Redelivered"])              ?? "").trim().toLowerCase() === "true"
     if (isDisputed)   entry.disputed++
     if (isAccepted)   entry.accepted++
     if (isRedelivered) entry.redelivered++
 
-    const noteVal = String(findColVal(row, ["Dispute Notes"]) ?? "").trim()
+    const noteVal = String(findColVal(row, ["Dispute Notes", "Notes"]) ?? "").trim()
     if (isDisputed || isAccepted || noteVal) {
       entry.disputes.push({ upc, artist, title, disputed:isDisputed, accepted:isAccepted, redelivered:isRedelivered, note:noteVal })
     }
