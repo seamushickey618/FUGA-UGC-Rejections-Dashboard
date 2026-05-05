@@ -659,7 +659,7 @@ export default function App() {
     if (!selectedFile?.csv_content) return []
     let rows = []
     Papa.parse(selectedFile.csv_content, { header:true, skipEmptyLines:true, complete: r => { rows = r.data } })
-    return rows.slice(0, 100)
+    return rows
   }, [selectedFile])
 
   const categoryTableData = useMemo(() =>
@@ -1005,8 +1005,7 @@ export default function App() {
                               </td>
                               {note && (
                                 <td style={{ padding:"6px 8px", fontSize:10, color:"#64748b",
-                                  verticalAlign:"top", lineHeight:1.5, maxWidth:150,
-                                  overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{note}</td>
+                                  verticalAlign:"top", lineHeight:1.6, maxWidth:240 }}>{note}</td>
                               )}
                             </tr>
                           ))}
@@ -1113,20 +1112,9 @@ export default function App() {
 
           {/* UPC / ISRC breakdown */}
           <div style={S.card}>
-            <button onClick={() => setUpcExpanded(x => !x)}
-              style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between",
-                background:"transparent", border:"none", cursor:"pointer", padding:0, textAlign:"left" }}>
-              <div>
-                <p style={{ ...S.label, marginBottom:3 }}>UPC / ISRC breakdown — {fmtWeek(tableWk)}</p>
-                <p style={{ fontSize:11, color:"#334155" }}>
-                  {latestWeekRows.length} rejected products · click to {upcExpanded ? "collapse" : "expand"}
-                </p>
-              </div>
-              <span style={{ fontSize:20, color:"#475569", lineHeight:1,
-                transform:upcExpanded ? "rotate(180deg)" : "rotate(0deg)", transition:"transform 0.2s" }}>⌄</span>
-            </button>
-            {upcExpanded && (
-              <div style={{ marginTop:18, overflowX:"auto" }}>
+            <p style={{ ...S.label, marginBottom:4 }}>UPC / ISRC breakdown — {fmtWeek(tableWk)}</p>
+            <p style={{ fontSize:11, color:"#334155", marginBottom:16 }}>{latestWeekRows.length} rejected products</p>
+            <div style={{ overflowX:"auto" }}>
                 <table style={{ width:"100%", borderCollapse:"collapse", minWidth:560 }}>
                   <thead>
                     <tr style={{ borderBottom:"1px solid #1e293b" }}>
@@ -1185,8 +1173,7 @@ export default function App() {
                     No data for {fmtWeek(tableWk)}
                   </p>
                 )}
-              </div>
-            )}
+            </div>
           </div>
 
         </>)}
@@ -1260,7 +1247,7 @@ export default function App() {
           {filePreviewRows.length > 0 ? (
             <div style={S.card}>
               <p style={{ ...S.label, marginBottom:12 }}>
-                CSV preview — first {filePreviewRows.length} of {fmtN(selectedFile.rows)} rows
+                {fmtN(filePreviewRows.length)} rows
               </p>
               <div style={{ overflowX:"auto" }}>
                 <table style={{ borderCollapse:"collapse", fontSize:11 }}>
