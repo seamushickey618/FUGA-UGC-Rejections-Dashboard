@@ -61,8 +61,8 @@ const CAT_SHORT = {
 }
 
 // Weeks with unreliable/missing dispute data — omitted from dispute analysis
-const OMIT_DISPUTE_WEEKS = ["2026-01-16", "2026-01-30", "2026-02-27", "2026-03-06"]
-const OMIT_DISPUTE_LABELS = ["Jan 16", "Jan 30", "Feb 27", "Mar 6"]
+const OMIT_DISPUTE_WEEKS = ["2026-01-23", "2026-01-30", "2026-02-27", "2026-03-06"]
+const OMIT_DISPUTE_LABELS = ["Jan 23", "Jan 30", "Feb 27", "Mar 6"]
 
 const ISRC_RE = /^[a-zA-Z]{2}[a-zA-Z0-9]{3}\d{7}$/i
 const PASSCODE = "L&R*uGc"
@@ -521,9 +521,9 @@ export default function App() {
   const summaryData = useMemo(() => {
     const calc = (rej, disp, acc, redel) => ({
       rej,
-      pctDisp:   rej  > 0 ? disp / rej  * 100 : null,
-      pctAcc:    disp > 0 ? acc  / disp  * 100 : null,
-      pctRedel:  acc  > 0 ? redel / acc  * 100 : null,
+      pctDisp:  rej > 0 ? disp  / rej * 100 : null,
+      pctAcc:   rej > 0 ? acc   / rej * 100 : null,
+      pctRedel: rej > 0 ? redel / rej * 100 : null,
     })
     // Weekly
     const wRej   = tableWkStats?.totalRejections ?? 0
@@ -902,7 +902,7 @@ export default function App() {
                 {/* KPI mini-row */}
                 <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:8, marginBottom:16 }}>
                   {[
-                    { label:"Content ID",  value:disputeWeekStats.contentIdCount },
+                    { label:"Rejections",  value:tableWkStats?.totalRejections ?? 0 },
                     { label:"Disputed",    value:disputeWeekStats.disputed },
                     { label:"Accepted",    value:disputeWeekStats.accepted },
                     { label:"Redelivered", value:disputeWeekStats.redelivered },
@@ -911,9 +911,9 @@ export default function App() {
                       value: disputeWeekStats.disputed > 0
                         ? `${(disputeWeekStats.accepted/disputeWeekStats.disputed*100).toFixed(0)}%` : "—",
                       isText:true },
-                    { label:"Accepted/CID",
-                      value: disputeWeekStats.contentIdCount > 0
-                        ? `${(disputeWeekStats.accepted/disputeWeekStats.contentIdCount*100).toFixed(0)}%` : "—",
+                    { label:"Accepted Disputes / Rejections",
+                      value: (tableWkStats?.totalRejections ?? 0) > 0
+                        ? `${(disputeWeekStats.accepted/(tableWkStats.totalRejections)*100).toFixed(0)}%` : "—",
                       isText:true },
                   ].map(({ label, value, isText }) => (
                     <div key={label} style={{ background:"#0a1120", borderRadius:7, padding:"8px 10px" }}>
@@ -978,9 +978,9 @@ export default function App() {
 
         {/* ════ ALL DISPUTES PAGE ════ */}
         {page === "disputes" && (() => {
-          const disputed   = allDisputeRows.filter(r => r.disputed)
-          const accepted   = allDisputeRows.filter(r => r.accepted)
           const redelivered = allDisputeRows.filter(r => r.redelivered)
+          const accepted   = allDisputeRows.filter(r => r.accepted && !r.redelivered)
+          const disputed   = allDisputeRows.filter(r => r.disputed && !r.accepted && !r.redelivered)
 
           const DisputeTable = ({ rows }) => (
             <div style={{ overflowX:"auto" }}>
