@@ -14,32 +14,23 @@ async function dbLoadData() {
   if (error || !data) return {}
   return Object.fromEntries(data.map(r => [r.week_start, r.stats]))
 }
-
 async function dbSaveData(weeklyData) {
   const rows = Object.entries(weeklyData).map(([week_start, stats]) => ({ week_start, stats }))
   await supabase.from("weekly_data").upsert(rows, { onConflict: "week_start" })
 }
-
 async function dbLoadFiles() {
   const { data, error } = await supabase.from("processed_files").select("*").order("uploaded_at", { ascending: true })
   if (error || !data) return []
   return data
 }
-
 async function dbSaveFile(rec) {
   await supabase.from("processed_files").upsert(rec, { onConflict: "sig" })
 }
-
 async function dbClearAll() {
-  // Load all keys first, then delete them explicitly
   const { data: wdRows } = await supabase.from("weekly_data").select("week_start")
   const { data: pfRows } = await supabase.from("processed_files").select("sig")
-  if (wdRows?.length) {
-    await supabase.from("weekly_data").delete().in("week_start", wdRows.map(r => r.week_start))
-  }
-  if (pfRows?.length) {
-    await supabase.from("processed_files").delete().in("sig", pfRows.map(r => r.sig))
-  }
+  if (wdRows?.length) await supabase.from("weekly_data").delete().in("week_start", wdRows.map(r => r.week_start))
+  if (pfRows?.length) await supabase.from("processed_files").delete().in("sig", pfRows.map(r => r.sig))
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -69,8 +60,12 @@ const CAT_SHORT = {
   "other":                                "Other"
 }
 
-const ISRC_RE = /^[a-zA-Z]{2}[a-zA-Z0-9]{3}\d{7}$/i
+// Weeks with unreliable/missing dispute data — omitted from dispute analysis
+const OMIT_DISPUTE_WEEKS = ["2026-01-16", "2026-01-30", "2026-02-27", "2026-03-06"]
+const OMIT_DISPUTE_LABELS = ["Jan 16", "Jan 30", "Feb 27", "Mar 6"]
 
+const ISRC_RE = /^[a-zA-Z]{2}[a-zA-Z0-9]{3}\d{7}$/i
+const PASSCODE = "L&R*uGc"
 
 // ── Date helpers ──────────────────────────────────────────────────────────
 function parseDate(s) {
@@ -81,37 +76,29 @@ function parseDate(s) {
   const d = new Date(s)
   return isNaN(d.getTime()) ? null : d
 }
-
 function weekStart(d) {
   const diff = (5 - d.getDay() + 7) % 7
-  const w    = new Date(d); w.setDate(d.getDate() + diff)
+  const w = new Date(d); w.setDate(d.getDate() + diff)
   return w.toISOString().split("T")[0]
 }
-
 function fmtWeek(wk) {
   return new Date(wk + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })
 }
-
 function fmtDate(s) {
   return new Date(s + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })
 }
-
 function fmtN(n) { return n?.toLocaleString() ?? "—" }
-
+function fmtPct(n) { return n == null ? "—" : `${n.toFixed(1)}%` }
 function lastFriday() {
-  const d    = new Date()
-  const diff = (5 - d.getDay() + 7) % 7
-  d.setDate(d.getDate() - (diff === 0 ? 0 : 7 - diff))
-  // simpler: go back to most recent Friday
-  const day  = new Date()
-  const back = (day.getDay() + 2) % 7   // days since last Friday (Fri=0)
+  const day = new Date()
+  const back = (day.getDay() + 2) % 7
   day.setDate(day.getDate() - back)
   return day.toISOString().split("T")[0]
 }
 
 // ── Categorisation ────────────────────────────────────────────────────────
 function categorizeIssue(issue) {
-  const t    = issue.toLowerCase()
+  const t = issue.toLowerCase()
   const cats = new Set()
   if (t.includes("fingerprint match with another track"))           cats.add("fingerprint match")
   if (t.includes("watchlist"))                                      cats.add("watchlist")
@@ -170,62 +157,6 @@ function processRows(rows, fallbackDate = null) {
   return ws
 }
 
-// ── CSV → per-row detail (for UPC/ISRC table) ────────────────────────────
-function parseLevelCats(block) {
-  const bullets = [...block.matchAll(/[•\-]\s+(.*)/g)].map(m => m[1].trim().toLowerCase())
-  const cats = new Set()
-  const seen = new Set()
-  for (const b of bullets) {
-    if (ISRC_RE.test(b) || b === "multiple" || seen.has(b)) continue
-    seen.add(b)
-    for (const c of categorizeIssue(b)) cats.add(c)
-  }
-  return [...cats].sort()
-}
-
-function parseRowsDetail(csvText, fallbackDate = null) {
-  let rows = []
-  Papa.parse(csvText, { header: true, skipEmptyLines: true, complete: r => { rows = r.data } })
-  const result = {}
-  for (const row of rows) {
-    const monetizedKey = Object.keys(row).find(k => ["content id monetized isrcs","content id monetised isrcs"].includes(k.trim().toLowerCase()))
-    if (monetizedKey !== undefined && !String(row[monetizedKey]).trim()) continue
-    const rawDate = row["Date"] || row["date"] || fallbackDate
-    if (!rawDate) continue
-    const d = parseDate(rawDate)
-    if (!d) continue
-    const text = row["Asset ISRC & Reasons"] || row["asset isrc & reasons"]
-    if (!text?.trim()) continue
-    const upc = String(row["Product UPC"] || row["product upc"] || "").trim()
-    const wk  = weekStart(d)
-    if (!result[wk]) result[wk] = []
-
-    // Extract ISRCs: from bullet points, or from monetised column if "Multiple" is used
-    const bulletIsrcs = [...text.matchAll(/[•]\s+([A-Z]{2}[A-Z0-9]{3}\d{7})/gi)]
-      .map(m => m[1].toUpperCase())
-      .filter((v, i, a) => a.indexOf(v) === i)
-    const monetisedVal = monetizedKey ? String(row[monetizedKey]).trim() : ""
-    const monetisedIsrcs = monetisedVal
-      ? monetisedVal.split("|").map(s => s.trim().toUpperCase()).filter(s => ISRC_RE.test(s))
-      : []
-    const isrcs = bulletIsrcs.length > 0 ? bulletIsrcs : monetisedIsrcs
-
-    // Split into product-level and asset-level sections
-    const prodMatch  = text.match(/Product-level issues?:([\s\S]*?)(?=Asset-level issues?:|$)/i)
-    const assetMatch = text.match(/Asset-level issues?:([\s\S]*)/i)
-    const prodCats  = prodMatch  ? parseLevelCats(prodMatch[1])  : []
-    const assetCats = assetMatch ? parseLevelCats(assetMatch[1]) : []
-    const hasSections = prodMatch || assetMatch
-    const allCats = parseLevelCats(text)
-
-    result[wk].push({
-      upc, isrcs,
-      prodCats:  hasSections ? prodCats  : [],
-      assetCats: hasSections ? assetCats : allCats,
-    })
-  }
-  return result
-}
 // ── Dispute & Content ID parsing ─────────────────────────────────────────
 function findColVal(row, names) {
   const keys = Object.keys(row)
@@ -258,7 +189,6 @@ function parseDisputeStats(csvText, fallbackDate = null) {
       const isrcs = monetisedVal.split("|").map(s => s.trim()).filter(s => ISRC_RE.test(s))
       if (isrcs.length) entry.contentIdCount++
     }
-
     const verifiedVal = String(findColVal(row, ["Artists Verified by LANDR vLookup"]) ?? "").trim()
     if (verifiedVal && verifiedVal !== "#N/A") entry.verifiedArtists++
 
@@ -266,9 +196,9 @@ function parseDisputeStats(csvText, fallbackDate = null) {
     const acceptedRaw   = String(findColVal(row, ["Dispute accepted by FUGA"]) ?? "").trim().toLowerCase()
     const isDisputed    = disputedRaw === "yes" || disputedRaw === "true"
     const isAccepted    = acceptedRaw === "yes" || acceptedRaw === "true"
-    const isRedelivered = String(findColVal(row, ["Redelivered"])              ?? "").trim().toLowerCase() === "true"
-    if (isDisputed)   entry.disputed++
-    if (isAccepted)   entry.accepted++
+    const isRedelivered = String(findColVal(row, ["Redelivered"]) ?? "").trim().toLowerCase() === "true"
+    if (isDisputed)    entry.disputed++
+    if (isAccepted)    entry.accepted++
     if (isRedelivered) entry.redelivered++
 
     const noteVal = String(findColVal(row, ["Dispute Notes", "Notes"]) ?? "").trim()
@@ -279,19 +209,17 @@ function parseDisputeStats(csvText, fallbackDate = null) {
   return result
 }
 
+// ── DateModal ─────────────────────────────────────────────────────────────
 function DateModal({ files, existingDates, onConfirm, onCancel }) {
-  const [date,    setDate]    = useState(lastFriday)
+  const [date, setDate]       = useState(lastFriday)
   const [conflict, setConflict] = useState(false)
   const inputRef              = useRef(null)
   useEffect(() => { inputRef.current?.focus() }, [])
 
   function handleLoad() {
     if (!date) return
-    if (existingDates.includes(date)) {
-      setConflict(true)
-    } else {
-      onConfirm(date, false)
-    }
+    if (existingDates.includes(date)) setConflict(true)
+    else onConfirm(date, false)
   }
 
   return (
@@ -307,7 +235,6 @@ function DateModal({ files, existingDates, onConfirm, onCancel }) {
             <line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
           </svg>
         </div>
-
         {!conflict ? (<>
           <p style={{ fontSize:15, fontWeight:700, color:"#f1f5f9", marginBottom:8 }}>No date column found</p>
           <p style={{ fontSize:13, color:"#64748b", marginBottom:6, lineHeight:1.6 }}>
@@ -330,14 +257,13 @@ function DateModal({ files, existingDates, onConfirm, onCancel }) {
             <button onClick={handleLoad} disabled={!date} style={{ flex:2, padding:"10px 0",
               borderRadius:8, fontSize:13, fontWeight:600, cursor:date?"pointer":"not-allowed",
               fontFamily:"'DM Sans',sans-serif", background:date?"#2563EB":"#1e293b",
-              border:"none", color:date?"#fff":"#475569", transition:"background 0.15s" }}>Load files</button>
+              border:"none", color:date?"#fff":"#475569" }}>Load files</button>
           </div>
         </>) : (<>
           <p style={{ fontSize:15, fontWeight:700, color:"#f1f5f9", marginBottom:8 }}>Report already uploaded</p>
           <p style={{ fontSize:13, color:"#64748b", marginBottom:24, lineHeight:1.6 }}>
-            A report for <span style={{ color:"#f1f5f9", fontFamily:"'DM Mono',monospace" }}>
-              {fmtDate(date)}
-            </span> has already been uploaded. Would you like to replace it with this file, or cancel?
+            A report for <span style={{ color:"#f1f5f9", fontFamily:"'DM Mono',monospace" }}>{fmtDate(date)}</span> already exists.
+            Replace it?
           </p>
           <div style={{ display:"flex", gap:10 }}>
             <button onClick={onCancel} style={{ flex:1, padding:"10px 0", borderRadius:8, fontSize:13,
@@ -345,8 +271,7 @@ function DateModal({ files, existingDates, onConfirm, onCancel }) {
               background:"transparent", border:"1px solid #1e293b", color:"#64748b" }}>Cancel</button>
             <button onClick={() => onConfirm(date, true)} style={{ flex:2, padding:"10px 0",
               borderRadius:8, fontSize:13, fontWeight:600, cursor:"pointer",
-              fontFamily:"'DM Sans',sans-serif", background:"#dc2626",
-              border:"none", color:"#fff" }}>Replace</button>
+              fontFamily:"'DM Sans',sans-serif", background:"#dc2626", border:"none", color:"#fff" }}>Replace</button>
           </div>
         </>)}
       </div>
@@ -374,32 +299,6 @@ function ChartTooltip({ active, payload, label }) {
   )
 }
 
-function DisputePctTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null
-  const raw = payload[0]?.payload?._raw
-  return (
-    <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:8,
-      padding:"10px 14px", fontFamily:"'DM Mono',monospace" }}>
-      <p style={{ color:"#94a3b8", fontSize:11, marginBottom:6 }}>{label}</p>
-      {payload.filter(p => !p.dataKey.startsWith("_")).map(p => (
-        <div key={p.dataKey} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
-          <div style={{ width:8, height:8, borderRadius:"50%", background:p.color, flexShrink:0 }} />
-          <span style={{ color:"#cbd5e1", fontSize:11 }}>{p.name}</span>
-          <span style={{ color:"#f1f5f9", fontSize:12, fontWeight:600, marginLeft:"auto", paddingLeft:16 }}>
-            {p.value != null ? `${p.value}%` : "—"}
-          </span>
-        </div>
-      ))}
-      {raw && (
-        <div style={{ borderTop:"1px solid #1e293b", marginTop:6, paddingTop:6,
-          fontSize:10, color:"#475569" }}>
-          Content ID: {raw.contentId} · Disputed: {raw.disputed} · Accepted: {raw.accepted}
-        </div>
-      )}
-    </div>
-  )
-}
-
 function Delta({ curr, prev, invert = false }) {
   if (prev == null || prev === 0) return null
   const pct  = (curr - prev) / prev * 100
@@ -416,26 +315,27 @@ function Delta({ curr, prev, invert = false }) {
 
 // ── App ───────────────────────────────────────────────────────────────────
 export default function App() {
-  const [weeklyData,      setWeeklyData]      = useState({})
-  const [processedFiles,  setProcessedFiles]  = useState([])
-  const [isDragging,      setIsDragging]      = useState(false)
-  const [isProcessing,    setIsProcessing]    = useState(false)
-  const [isLoading,       setIsLoading]       = useState(true)
-  const [toasts,          setToasts]          = useState([])
-  const [pendingModal,    setPendingModal]    = useState(null)
-  const [selectedWk,      setSelectedWk]      = useState(null)
-  const [upcExpanded,     setUpcExpanded]     = useState(false)
-  const [disputeExpanded, setDisputeExpanded] = useState(false)
-  const [page,            setPage]            = useState("dashboard")
-  const [selectedFile,    setSelectedFile]    = useState(null)
+  const [authed,         setAuthed]         = useState(() => sessionStorage.getItem("ugc_auth") === "1")
+  const [pwd,            setPwd]            = useState("")
+  const [pwdErr,         setPwdErr]         = useState(false)
+  const [weeklyData,     setWeeklyData]     = useState({})
+  const [processedFiles, setProcessedFiles] = useState([])
+  const [isDragging,     setIsDragging]     = useState(false)
+  const [isProcessing,   setIsProcessing]   = useState(false)
+  const [isLoading,      setIsLoading]      = useState(true)
+  const [toasts,         setToasts]         = useState([])
+  const [pendingModal,   setPendingModal]   = useState(null)
+  const [selectedWk,     setSelectedWk]     = useState(null)
+  const [page,           setPage]           = useState("dashboard")
 
   useEffect(() => {
+    if (!authed) { setIsLoading(false); return }
     Promise.all([dbLoadData(), dbLoadFiles()]).then(([data, files]) => {
       setWeeklyData(data)
       setProcessedFiles(files)
       setIsLoading(false)
     })
-  }, [])
+  }, [authed])
 
   const addToast = (msg, type = "success") => {
     const id = Date.now() + Math.random()
@@ -446,41 +346,27 @@ export default function App() {
   const ingest = useCallback(async (items) => {
     let updated  = await dbLoadData()
     let updFiles = await dbLoadFiles()
-
     for (const { file, rows, rawText, fallbackDate, replace } of items) {
       const newStats = processRows(rows, fallbackDate ?? null)
       Object.assign(updated, newStats)
-
       const weeks   = Object.keys(newStats).sort()
       const dateKey = fallbackDate ?? (weeks[0] ?? "unknown")
-      const sig     = dateKey   // use report date as unique key
-
-      // Remove old record if replacing
+      const sig     = dateKey
       if (replace) {
         updFiles = updFiles.filter(f => f.sig !== sig)
         await supabase.from("processed_files").delete().eq("sig", sig)
       }
-
       const rec = {
-        sig,
-        name:        file.name,
-        uploaded_at: new Date().toISOString(),
-        rows:        rows.length,
-        weeks:       weeks.length,
-        date_range:  weeks.length ? `${fmtWeek(weeks[0])} – ${fmtWeek(weeks[weeks.length-1])}` : "—",
-        manual_date: fallbackDate ?? null,
-        csv_content: rawText,
+        sig, name: file.name, uploaded_at: new Date().toISOString(),
+        rows: rows.length, weeks: weeks.length,
+        date_range: weeks.length ? `${fmtWeek(weeks[0])} – ${fmtWeek(weeks[weeks.length-1])}` : "—",
+        manual_date: fallbackDate ?? null, csv_content: rawText,
       }
-
       await dbSaveFile(rec)
       updFiles.push(rec)
-
-      addToast(
-        `Loaded "${file.name}" — ${fmtN(rows.length)} rows, ${weeks.length} week${weeks.length !== 1 ? "s" : ""}` +
-        (fallbackDate ? ` (${fmtDate(fallbackDate)} report)` : ` (${rec.date_range})`)
-      )
+      addToast(`Loaded "${file.name}" — ${fmtN(rows.length)} rows, ${weeks.length} week${weeks.length !== 1 ? "s" : ""}` +
+        (fallbackDate ? ` (${fmtDate(fallbackDate)} report)` : ` (${rec.date_range})`))
     }
-
     await dbSaveData(updated)
     setWeeklyData({ ...updated })
     setProcessedFiles([...updFiles])
@@ -492,33 +378,23 @@ export default function App() {
     const files = [...e.dataTransfer.files].filter(f => f.name.endsWith(".csv"))
     if (!files.length) { addToast("Please drop a CSV file", "error"); return }
     setIsProcessing(true)
-
     const parsed = await Promise.all(files.map(file =>
       new Promise((res, rej) => {
         const reader = new FileReader()
         reader.onload = e => {
           const rawText = e.target.result
-          Papa.parse(rawText, {
-            header: true, skipEmptyLines: true,
-            complete: r => res({ file, rows: r.data, rawText }),
-            error: rej
-          })
+          Papa.parse(rawText, { header: true, skipEmptyLines: true,
+            complete: r => res({ file, rows: r.data, rawText }), error: rej })
         }
         reader.onerror = rej
         reader.readAsText(file)
       })
     ))
-
     setIsProcessing(false)
-
     const datedFiles    = parsed.filter(({ rows }) => rows.length && ("Date" in rows[0] || "date" in rows[0]))
     const datelessFiles = parsed.filter(({ rows }) => !rows.length || !("Date" in rows[0] || "date" in rows[0]))
-
-    if (datelessFiles.length > 0) {
-      setPendingModal({ datelessFiles, datedFiles })
-    } else {
-      await ingest(datedFiles)
-    }
+    if (datelessFiles.length > 0) setPendingModal({ datelessFiles, datedFiles })
+    else await ingest(datedFiles)
   }, [ingest])
 
   const handleModalConfirm = useCallback(async (dateStr, replace) => {
@@ -534,18 +410,13 @@ export default function App() {
     if (!f.csv_content) { addToast("No CSV data stored for this file", "error"); return }
     const blob = new Blob([f.csv_content], { type: "text/csv" })
     const url  = URL.createObjectURL(blob)
-    const a    = document.createElement("a")
-    a.href     = url
-    a.download = f.name
-    a.click()
+    const a    = document.createElement("a"); a.href = url; a.download = f.name; a.click()
     URL.revokeObjectURL(url)
   }
 
   const handleDeleteFile = async (f) => {
-    if (!window.confirm(`Remove "${f.name}" from the analysis? This cannot be undone.`)) return
-    // Delete from Supabase
+    if (!window.confirm(`Remove "${f.name}"? This cannot be undone.`)) return
     await supabase.from("processed_files").delete().eq("sig", f.sig)
-    // Rebuild weekly_data from remaining files
     const remaining = processedFiles.filter(pf => pf.sig !== f.sig)
     const rebuilt   = {}
     for (const pf of remaining) {
@@ -553,47 +424,36 @@ export default function App() {
       const rows = await new Promise(res =>
         Papa.parse(pf.csv_content, { header:true, skipEmptyLines:true, complete: r => res(r.data) })
       )
-      const stats = processRows(rows, pf.manual_date ?? null)
-      Object.assign(rebuilt, stats)
+      Object.assign(rebuilt, processRows(rows, pf.manual_date ?? null))
     }
     await dbSaveData(rebuilt)
-    // Re-save remaining files (clear all then re-upsert to keep it clean)
     await supabase.from("weekly_data").delete().neq("week_start", "")
-    for (const wk of Object.keys(rebuilt)) {
+    for (const wk of Object.keys(rebuilt))
       await supabase.from("weekly_data").upsert({ week_start: wk, stats: rebuilt[wk] })
-    }
     setWeeklyData({ ...rebuilt })
     setProcessedFiles(remaining)
-    addToast(`"${f.name}" removed from analysis`)
+    addToast(`"${f.name}" removed`)
   }
 
   const handleClear = async () => {
     if (!window.confirm("Clear all stored data and upload history?")) return
     await dbClearAll()
-    // Re-read from DB to confirm everything is gone
     const [data, files] = await Promise.all([dbLoadData(), dbLoadFiles()])
-    setWeeklyData(data)
-    setProcessedFiles(files)
+    setWeeklyData(data); setProcessedFiles(files)
     addToast("All data cleared")
   }
 
   // ── Derived ───────────────────────────────────────────────────────────
-  const sortedWeeks    = Object.keys(weeklyData).sort()
-  const hasData        = sortedWeeks.length > 0
-  const latestWk       = sortedWeeks.at(-1)
-  const tableWk        = selectedWk ?? latestWk
-  const tableWkIdx     = sortedWeeks.indexOf(tableWk)
-  const prevTableWk    = tableWkIdx > 0 ? sortedWeeks[tableWkIdx - 1] : null
-  const tableWkStats   = tableWk    ? weeklyData[tableWk]    : null
+  const sortedWeeks  = Object.keys(weeklyData).sort()
+  const hasData      = sortedWeeks.length > 0
+  const latestWk     = sortedWeeks.at(-1)
+  const tableWk      = selectedWk ?? latestWk
+  const tableWkIdx   = sortedWeeks.indexOf(tableWk)
+  const prevTableWk  = tableWkIdx > 0 ? sortedWeeks[tableWkIdx - 1] : null
+  const tableWkStats = tableWk ? weeklyData[tableWk] : null
   const prevTableStats = prevTableWk ? weeklyData[prevTableWk] : null
-  const totalRej       = sortedWeeks.reduce((s, w) => s + weeklyData[w].totalRejections, 0)
+  const totalRej     = sortedWeeks.reduce((s, w) => s + weeklyData[w].totalRejections, 0)
 
-  const chartData = sortedWeeks.map(wk => ({
-    week: fmtWeek(wk),
-    rejections: weeklyData[wk].totalRejections,
-  }))
-
-  // All dispute stats across every loaded week
   const allDisputeStats = useMemo(() => {
     const combined = {}
     for (const pf of processedFiles) {
@@ -613,55 +473,20 @@ export default function App() {
     return combined
   }, [processedFiles])
 
-  // Dispute stats for the selected week only
+  // Dispute stats with omitted weeks excluded
+  const filteredDisputeStats = useMemo(() =>
+    Object.fromEntries(Object.entries(allDisputeStats).filter(([wk]) => !OMIT_DISPUTE_WEEKS.includes(wk))),
+    [allDisputeStats]
+  )
+
   const disputeWeekStats = useMemo(() => {
-    const s = allDisputeStats[tableWk]
+    const s = filteredDisputeStats[tableWk]
     if (!s) return null
-    const has = s.contentIdCount > 0 || s.verifiedArtists > 0 || s.disputed > 0 || s.accepted > 0 || s.redelivered > 0
+    const has = s.contentIdCount > 0 || s.disputed > 0 || s.accepted > 0 || s.redelivered > 0
     return has ? s : null
-  }, [allDisputeStats, tableWk])
+  }, [filteredDisputeStats, tableWk])
 
-  // Dispute chart data — week over week
-  const disputeChartData = useMemo(() =>
-    sortedWeeks.map(wk => {
-      const s = allDisputeStats[wk]
-      return { week: fmtWeek(wk), "Content ID": s?.contentIdCount ?? 0, "Disputed": s?.disputed ?? 0, "Accepted": s?.accepted ?? 0 }
-    }),
-    [allDisputeStats, sortedWeeks]
-  )
-  const hasDisputeChartData = disputeChartData.some(d => d["Content ID"] > 0 || d["Disputed"] > 0 || d["Accepted"] > 0)
-
-  // UPC detail rows for the selected week
-  const latestWeekRows = useMemo(() => {
-    if (!tableWk || !processedFiles.length) return []
-    const all = []
-    for (const pf of processedFiles) {
-      if (!pf.csv_content) continue
-      const detail = parseRowsDetail(pf.csv_content, pf.manual_date ?? null)
-      if (detail[tableWk]) all.push(...detail[tableWk])
-    }
-    return all
-  }, [processedFiles, tableWk])
-
-  // Category breakdown table
-  const disputePctChartData = useMemo(() =>
-    sortedWeeks.map(wk => {
-      const s = allDisputeStats[wk]
-      const pctDisputed = s?.contentIdCount > 0 ? +(s.disputed / s.contentIdCount * 100).toFixed(1) : null
-      const pctAccepted = s?.disputed > 0 ? +(s.accepted / s.disputed * 100).toFixed(1) : null
-      return { week: fmtWeek(wk), "Disputed %": pctDisputed, "Accepted %": pctAccepted,
-        _raw: s ? { disputed:s.disputed, contentId:s.contentIdCount, accepted:s.accepted } : null }
-    }),
-    [allDisputeStats, sortedWeeks]
-  )
-
-  const filePreviewRows = useMemo(() => {
-    if (!selectedFile?.csv_content) return []
-    let rows = []
-    Papa.parse(selectedFile.csv_content, { header:true, skipEmptyLines:true, complete: r => { rows = r.data } })
-    return rows
-  }, [selectedFile])
-
+  // Category data for selected week
   const categoryTableData = useMemo(() =>
     CATEGORIES.map(c => {
       const allVals = sortedWeeks.map(wk => weeklyData[wk]?.categories[c]?.rejections ?? 0)
@@ -678,42 +503,150 @@ export default function App() {
     [weeklyData, sortedWeeks, tableWk, prevTableWk]
   )
 
+  // Combined time series: rejections + disputes + accepted
+  const combinedChartData = useMemo(() =>
+    sortedWeeks.map(wk => {
+      const d = filteredDisputeStats[wk]
+      return {
+        week: fmtWeek(wk),
+        Rejections: weeklyData[wk]?.totalRejections ?? 0,
+        Disputes:   d ? d.disputed : null,
+        Accepted:   d ? d.accepted : null,
+      }
+    }),
+    [weeklyData, filteredDisputeStats, sortedWeeks]
+  )
+
+  // Summary: weekly / monthly / total
+  const summaryData = useMemo(() => {
+    const calc = (rej, disp, acc, redel) => ({
+      rej,
+      pctDisp:   rej  > 0 ? disp / rej  * 100 : null,
+      pctAcc:    disp > 0 ? acc  / disp  * 100 : null,
+      pctRedel:  acc  > 0 ? redel / acc  * 100 : null,
+    })
+    // Weekly
+    const wRej   = tableWkStats?.totalRejections ?? 0
+    const wDisp  = filteredDisputeStats[tableWk]?.disputed  ?? 0
+    const wAcc   = filteredDisputeStats[tableWk]?.accepted  ?? 0
+    const wRedel = filteredDisputeStats[tableWk]?.redelivered ?? 0
+    // Monthly
+    const wkDate = tableWk ? new Date(tableWk + "T00:00:00") : null
+    const monthWeeks = wkDate
+      ? sortedWeeks.filter(wk => {
+          const d = new Date(wk + "T00:00:00")
+          return d.getMonth() === wkDate.getMonth() && d.getFullYear() === wkDate.getFullYear()
+        })
+      : []
+    const mRej   = monthWeeks.reduce((s, wk) => s + (weeklyData[wk]?.totalRejections ?? 0), 0)
+    const mDisp  = monthWeeks.reduce((s, wk) => s + (filteredDisputeStats[wk]?.disputed  ?? 0), 0)
+    const mAcc   = monthWeeks.reduce((s, wk) => s + (filteredDisputeStats[wk]?.accepted  ?? 0), 0)
+    const mRedel = monthWeeks.reduce((s, wk) => s + (filteredDisputeStats[wk]?.redelivered ?? 0), 0)
+    // Total
+    const tRej   = sortedWeeks.reduce((s, wk) => s + (weeklyData[wk]?.totalRejections ?? 0), 0)
+    const tDisp  = Object.values(filteredDisputeStats).reduce((s, v) => s + v.disputed,   0)
+    const tAcc   = Object.values(filteredDisputeStats).reduce((s, v) => s + v.accepted,   0)
+    const tRedel = Object.values(filteredDisputeStats).reduce((s, v) => s + v.redelivered, 0)
+    return {
+      weekly:  calc(wRej,  wDisp,  wAcc,  wRedel),
+      monthly: calc(mRej,  mDisp,  mAcc,  mRedel),
+      total:   calc(tRej,  tDisp,  tAcc,  tRedel),
+    }
+  }, [tableWk, tableWkStats, filteredDisputeStats, weeklyData, sortedWeeks])
+
+  // All dispute rows for master list (UPC + week attached)
+  const allDisputeRows = useMemo(() => {
+    const rows = []
+    for (const [wk, s] of Object.entries(filteredDisputeStats)) {
+      for (const d of s.disputes) rows.push({ ...d, wk, weekLabel: fmtWeek(wk) })
+    }
+    return rows.sort((a, b) => a.wk.localeCompare(b.wk))
+  }, [filteredDisputeStats])
+
   const S = {
     app:   { minHeight:"100vh", background:"#080d17", fontFamily:"'DM Sans',sans-serif", color:"#e2e8f0" },
-    card:  { background:"#0f172a", border:"1px solid #1e293b", borderRadius:12, padding:24 },
+    card:  { background:"#0f172a", border:"1px solid #1e293b", borderRadius:12, padding:20 },
     label: { fontSize:11, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", color:"#475569" },
     mono:  { fontFamily:"'DM Mono',monospace" },
   }
 
+  const globalStyle = `
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500;600&display=swap');
+    * { box-sizing:border-box; margin:0; padding:0 }
+    ::-webkit-scrollbar { width:6px } ::-webkit-scrollbar-track { background:#0f172a }
+    ::-webkit-scrollbar-thumb { background:#1e293b; border-radius:3px }
+    @keyframes spin   { to { transform:rotate(360deg) } }
+    @keyframes fadeUp { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:translateY(0) } }
+    .row-hover:hover  { background:rgba(255,255,255,0.03) !important }
+    .dl-btn:hover     { background:rgba(59,130,246,0.15) !important; border-color:rgba(59,130,246,0.4) !important }
+    input[type="date"]:focus { border-color:#2563EB !important }
+    input[type="password"]:focus { outline:none; border-color:#3B82F6 !important }
+  `
+
+  // ── Passcode gate ─────────────────────────────────────────────────────
+  if (!authed) return (
+    <div style={{ ...S.app, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <style>{globalStyle}</style>
+      <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:16,
+        padding:"40px 44px", width:360, boxShadow:"0 24px 60px rgba(0,0,0,0.6)",
+        display:"flex", flexDirection:"column", gap:20 }}>
+        <div>
+          <p style={{ fontSize:16, fontWeight:700, color:"#f1f5f9", marginBottom:4 }}>UGC Rejections</p>
+          <p style={{ fontSize:12, color:"#475569" }}>Enter passcode to continue</p>
+        </div>
+        <div>
+          <input
+            type="password"
+            value={pwd}
+            onChange={e => { setPwd(e.target.value); setPwdErr(false) }}
+            onKeyDown={e => {
+              if (e.key === "Enter") {
+                if (pwd === PASSCODE) { sessionStorage.setItem("ugc_auth","1"); setAuthed(true) }
+                else setPwdErr(true)
+              }
+            }}
+            placeholder="Passcode"
+            style={{ width:"100%", background:"#0a1120",
+              border:`1px solid ${pwdErr ? "#ef4444" : "#1e293b"}`, borderRadius:8,
+              padding:"10px 14px", fontSize:14, color:"#f1f5f9", fontFamily:"'DM Mono',monospace",
+              transition:"border-color 0.15s" }}
+          />
+          {pwdErr && <p style={{ fontSize:11, color:"#ef4444", marginTop:6 }}>Incorrect passcode</p>}
+        </div>
+        <button
+          onClick={() => {
+            if (pwd === PASSCODE) { sessionStorage.setItem("ugc_auth","1"); setAuthed(true) }
+            else setPwdErr(true)
+          }}
+          style={{ background:"#2563EB", border:"none", borderRadius:8, padding:"11px 0",
+            fontSize:13, fontWeight:600, color:"#fff", cursor:"pointer",
+            fontFamily:"'DM Sans',sans-serif" }}>
+          Enter
+        </button>
+      </div>
+    </div>
+  )
+
   if (isLoading) return (
     <div style={{ ...S.app, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <style>{globalStyle}</style>
       <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:16 }}>
         <div style={{ width:32, height:32, border:"2px solid #3B82F6", borderTopColor:"transparent",
           borderRadius:"50%", animation:"spin 0.8s linear infinite" }} />
-        <span style={{ color:"#475569", fontSize:13 }}>Loading from database…</span>
+        <span style={{ color:"#475569", fontSize:13 }}>Loading…</span>
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
     </div>
   )
 
   return (
     <div style={S.app}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500;600&display=swap');
-        * { box-sizing:border-box; margin:0; padding:0 }
-        ::-webkit-scrollbar { width:6px } ::-webkit-scrollbar-track { background:#0f172a }
-        ::-webkit-scrollbar-thumb { background:#1e293b; border-radius:3px }
-        @keyframes spin    { to { transform:rotate(360deg) } }
-        @keyframes fadeUp  { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:translateY(0) } }
-        .row-hover:hover   { background:rgba(255,255,255,0.03) !important }
-        .dl-btn:hover      { background:rgba(59,130,246,0.15) !important; border-color:rgba(59,130,246,0.4) !important }
-        input[type="date"]:focus { border-color:#2563EB !important }
-      `}</style>
+      <style>{globalStyle}</style>
 
       {pendingModal && (
         <DateModal files={pendingModal.datelessFiles.map(f => f.file)}
           existingDates={processedFiles.map(f => f.manual_date).filter(Boolean)}
-          onConfirm={handleModalConfirm} onCancel={() => { setPendingModal(null); addToast("Upload cancelled","error") }} />
+          onConfirm={handleModalConfirm}
+          onCancel={() => { setPendingModal(null); addToast("Upload cancelled","error") }} />
       )}
 
       {/* Toasts */}
@@ -735,17 +668,17 @@ export default function App() {
         display:"flex", alignItems:"center", justifyContent:"space-between" }}>
         <div style={{ display:"flex", alignItems:"center", gap:12 }}>
           {page !== "dashboard" && (
-            <button onClick={() => setPage(page === "file" ? "history" : "dashboard")}
+            <button onClick={() => setPage("dashboard")}
               style={{ fontSize:12, color:"#64748b", background:"transparent",
                 border:"1px solid #1e293b", padding:"4px 10px", borderRadius:6, cursor:"pointer",
-                fontFamily:"'DM Sans',sans-serif", display:"flex", alignItems:"center", gap:4 }}>
-              ← {page === "file" ? "History" : "Dashboard"}
+                fontFamily:"'DM Sans',sans-serif" }}>
+              ← Dashboard
             </button>
           )}
           <span style={{ fontSize:15, fontWeight:700, letterSpacing:"-0.02em", color:"#f1f5f9" }}>UGC Rejections</span>
           {page !== "dashboard" && (
             <span style={{ fontSize:12, color:"#475569" }}>
-              / {page === "detail" ? "Details" : page === "history" ? "History" : selectedFile?.name}
+              / {page === "disputes" ? "All Disputes" : "History"}
             </span>
           )}
           {page === "dashboard" && hasData && (
@@ -758,31 +691,33 @@ export default function App() {
           <button onClick={handleClear} style={{ fontSize:11, color:"#ef4444",
             background:"rgba(239,68,68,.08)", border:"1px solid rgba(239,68,68,.2)",
             padding:"5px 12px", borderRadius:6, cursor:"pointer",
-            fontFamily:"'DM Sans',sans-serif", letterSpacing:"0.03em" }}>CLEAR ALL</button>
+            fontFamily:"'DM Sans',sans-serif" }}>CLEAR ALL</button>
         )}
       </div>
 
-      <div style={{ maxWidth:1200, margin:"0 auto", padding:"16px 32px 28px",
+      <div style={{ maxWidth:1100, margin:"0 auto", padding:"16px 32px 32px",
         display:"flex", flexDirection:"column", gap:12 }}>
 
-        {/* Drop zone — dashboard + history pages */}
-        {(page === "dashboard" || page === "history") && (
+        {/* ════ DASHBOARD ════ */}
+        {page === "dashboard" && (<>
+
+          {/* Drop zone */}
           <div onDrop={handleDrop}
             onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
             onDragLeave={() => setIsDragging(false)}
             style={{ border:`1.5px dashed ${isDragging?"#3B82F6":"#1e293b"}`,
               background:isDragging?"rgba(59,130,246,0.06)":"#0a1120",
-              borderRadius:10, padding:hasData?"14px 20px":"40px 20px",
+              borderRadius:10, padding:hasData?"12px 20px":"36px 20px",
               textAlign:"center", transition:"all 0.2s ease" }}>
             {isProcessing ? (
-              <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:12 }}>
-                <div style={{ width:18, height:18, border:"2px solid #3B82F6",
-                  borderTopColor:"transparent", borderRadius:"50%", animation:"spin 0.7s linear infinite" }} />
-                <span style={{ color:"#64748b", fontSize:12 }}>Processing CSV…</span>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}>
+                <div style={{ width:16, height:16, border:"2px solid #3B82F6", borderTopColor:"transparent",
+                  borderRadius:"50%", animation:"spin 0.7s linear infinite" }} />
+                <span style={{ color:"#64748b", fontSize:12 }}>Processing…</span>
               </div>
             ) : (
-              <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}>
-                <svg width="18" height="18" fill="none" stroke={isDragging?"#3B82F6":"#334155"}
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+                <svg width="16" height="16" fill="none" stroke={isDragging?"#3B82F6":"#334155"}
                   strokeWidth="1.5" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round"
                     d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
@@ -793,490 +728,382 @@ export default function App() {
               </div>
             )}
           </div>
-        )}
 
-        {!hasData && page === "dashboard" && (
-          <div style={{ textAlign:"center", padding:"48px 0" }}>
-            <p style={{ fontSize:13, color:"#334155" }}>No data yet — drop a CSV above</p>
-          </div>
-        )}
+          {!hasData && (
+            <p style={{ fontSize:13, color:"#334155", textAlign:"center", padding:"40px 0" }}>No data yet — drop a CSV above</p>
+          )}
 
-        {/* ════════════ DASHBOARD ════════════ */}
-        {page === "dashboard" && hasData && tableWkStats && (<>
+          {hasData && tableWkStats && (<>
 
-          {/* Week selector bar */}
-          <div style={{ ...S.card, padding:"11px 18px", display:"flex", alignItems:"center", gap:18, flexWrap:"wrap" }}>
-            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-              <span style={S.label}>Week</span>
-              <select value={tableWk ?? ""} onChange={e => setSelectedWk(e.target.value)}
-                style={{ background:"#0a1120", border:"1px solid #1e293b", borderRadius:7,
-                  padding:"5px 10px", fontSize:12, color:"#cbd5e1", cursor:"pointer",
-                  fontFamily:"'DM Mono',monospace", outline:"none", colorScheme:"dark" }}>
-                {[...sortedWeeks].reverse().map(wk => (
-                  <option key={wk} value={wk}>{fmtWeek(wk)}{wk === latestWk ? " (latest)" : ""}</option>
-                ))}
-              </select>
-            </div>
-            <div style={{ width:1, height:22, background:"#1e293b", flexShrink:0 }} />
-            <div style={{ display:"flex", alignItems:"baseline", gap:7 }}>
-              <span style={{ fontSize:20, fontWeight:700, ...S.mono, color:"#f1f5f9", letterSpacing:"-0.02em" }}>
-                {fmtN(tableWkStats.totalRejections)}
-              </span>
-              <span style={{ fontSize:12, color:"#475569" }}>rejections</span>
-              <Delta curr={tableWkStats.totalRejections} prev={prevTableStats?.totalRejections} invert />
-            </div>
-            <div style={{ width:1, height:22, background:"#1e293b", flexShrink:0 }} />
-            <div style={{ display:"flex", alignItems:"center", gap:7 }}>
-              <span style={S.label}>Top issue</span>
-              <span style={{ fontSize:12, color:"#cbd5e1", fontWeight:600 }}>
-                {CAT_SHORT[Object.entries(tableWkStats.categories)
-                  .sort((a,b) => b[1].rejections - a[1].rejections)[0][0]]}
-              </span>
-            </div>
-            <div style={{ marginLeft:"auto", display:"flex", gap:8 }}>
-              <button onClick={() => setPage("detail")}
-                style={{ fontSize:11, color:"#64748b", background:"#0a1120",
-                  border:"1px solid #1e293b", padding:"5px 12px", borderRadius:6, cursor:"pointer",
-                  fontFamily:"'DM Sans',sans-serif", display:"flex", alignItems:"center", gap:5 }}>
-                Details & Breakdown <span>→</span>
-              </button>
-              <button onClick={() => setPage("history")}
-                style={{ fontSize:11, color:"#64748b", background:"#0a1120",
-                  border:"1px solid #1e293b", padding:"5px 12px", borderRadius:6, cursor:"pointer",
-                  fontFamily:"'DM Sans',sans-serif", display:"flex", alignItems:"center", gap:5 }}>
-                Upload History ({processedFiles.length}) <span>→</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Two-column layout */}
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, alignItems:"start" }}>
-
-            {/* ── Left: Rejection Analysis ── */}
-            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <div style={{ width:3, height:13, borderRadius:2, background:"#3B82F6", flexShrink:0 }} />
-                <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", color:"#3B82F6" }}>
-                  Rejection Analysis
+            {/* Week selector + nav */}
+            <div style={{ ...S.card, padding:"11px 18px", display:"flex", alignItems:"center", gap:16, flexWrap:"wrap" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                <span style={S.label}>Week</span>
+                <select value={tableWk ?? ""} onChange={e => setSelectedWk(e.target.value)}
+                  style={{ background:"#0a1120", border:"1px solid #1e293b", borderRadius:7,
+                    padding:"5px 10px", fontSize:12, color:"#cbd5e1", cursor:"pointer",
+                    fontFamily:"'DM Mono',monospace", outline:"none", colorScheme:"dark" }}>
+                  {[...sortedWeeks].reverse().map(wk => (
+                    <option key={wk} value={wk}>{fmtWeek(wk)}{wk === latestWk ? " (latest)" : ""}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ width:1, height:22, background:"#1e293b", flexShrink:0 }} />
+              <div style={{ display:"flex", alignItems:"baseline", gap:7 }}>
+                <span style={{ fontSize:20, fontWeight:700, ...S.mono, color:"#f1f5f9", letterSpacing:"-0.02em" }}>
+                  {fmtN(tableWkStats.totalRejections)}
                 </span>
-                <div style={{ flex:1, height:1, background:"#1e293b" }} />
+                <span style={{ fontSize:12, color:"#475569" }}>rejections</span>
+                <Delta curr={tableWkStats.totalRejections} prev={prevTableStats?.totalRejections} invert />
               </div>
+              <button onClick={() => setPage("history")}
+                style={{ marginLeft:"auto", fontSize:11, color:"#64748b", background:"#0a1120",
+                  border:"1px solid #1e293b", padding:"5px 12px", borderRadius:6, cursor:"pointer",
+                  fontFamily:"'DM Sans',sans-serif" }}>
+                Upload History →
+              </button>
+            </div>
 
-              {/* Compact category bars */}
+            {/* Summary table */}
+            <div style={S.card}>
+              <p style={{ ...S.label, marginBottom:14 }}>Summary</p>
+              <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                <thead>
+                  <tr style={{ borderBottom:"1px solid #1e293b" }}>
+                    <th style={{ ...S.label, textAlign:"left", padding:"0 12px 10px 0", width:"40%" }}></th>
+                    {[
+                      ["Weekly", fmtWeek(tableWk)],
+                      ["Monthly", tableWk ? new Date(tableWk+"T00:00:00").toLocaleDateString("en-US",{month:"long"}) : ""],
+                      ["Total", "all time"],
+                    ].map(([col, sub]) => (
+                      <th key={col} style={{ textAlign:"right", padding:"0 0 10px 12px" }}>
+                        <span style={{ ...S.label, display:"block" }}>{col}</span>
+                        <span style={{ fontSize:10, color:"#334155", fontWeight:400, textTransform:"none",
+                          letterSpacing:0 }}>{sub}</span>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    { label:"Rejections", fn: d => fmtN(d.rej), note:null },
+                    { label:"% Disputed", fn: d => fmtPct(d.pctDisp), note:null },
+                    { label:"% Accepted", fn: d => fmtPct(d.pctAcc), note:null },
+                    { label:"% Redelivered", fn: d => fmtPct(d.pctRedel), note:null },
+                  ].map(({ label, fn }) => (
+                    <tr key={label} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
+                      <td style={{ padding:"9px 12px 9px 0", fontSize:12, color:"#94a3b8" }}>{label}</td>
+                      {[summaryData.weekly, summaryData.monthly, summaryData.total].map((d, i) => (
+                        <td key={i} style={{ textAlign:"right", padding:"9px 0 9px 12px",
+                          fontSize:13, fontWeight:600, ...S.mono, color:"#f1f5f9" }}>
+                          {fn(d)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Bar chart + Time series — side by side */}
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+
+              {/* Horizontal bar chart */}
               <div style={S.card}>
-                <p style={{ ...S.label, marginBottom:10 }}>Issue categories — {fmtWeek(tableWk)}</p>
-                <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
-                  {(() => {
-                    const maxThisWk = Math.max(...categoryTableData.map(d => d.thisWk), 1)
-                    return categoryTableData.map(({ c, thisWk, prevVal, pct }) => (
-                      <div key={c} style={{ display:"flex", alignItems:"center", gap:8 }}>
-                        <div style={{ width:6, height:6, borderRadius:"50%", background:CAT_COLORS[c], flexShrink:0 }} />
-                        <span style={{ fontSize:11, color:"#94a3b8", width:72, flexShrink:0,
-                          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{CAT_SHORT[c]}</span>
-                        <div style={{ flex:1, height:4, background:"#1e293b", borderRadius:2, overflow:"hidden" }}>
-                          <div style={{ width:`${thisWk/maxThisWk*100}%`, height:"100%",
-                            background:CAT_COLORS[c], borderRadius:2 }} />
+                <p style={{ ...S.label, marginBottom:14 }}>Issue breakdown — {fmtWeek(tableWk)}</p>
+                {(() => {
+                  const maxVal = Math.max(
+                    ...categoryTableData.map(d => d.thisWk),
+                    disputeWeekStats?.disputed ?? 0,
+                    1
+                  )
+                  return (
+                    <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+                      {categoryTableData.map(({ c, thisWk }) => (
+                        <div key={c} style={{ display:"flex", alignItems:"center", gap:8 }}>
+                          <span style={{ fontSize:11, color:"#94a3b8", width:78, flexShrink:0,
+                            overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{CAT_SHORT[c]}</span>
+                          <div style={{ flex:1, height:5, background:"#1e293b", borderRadius:2, overflow:"hidden" }}>
+                            <div style={{ width:`${thisWk/maxVal*100}%`, height:"100%",
+                              background:CAT_COLORS[c], borderRadius:2 }} />
+                          </div>
+                          <span style={{ fontSize:12, fontWeight:600, ...S.mono, color:"#f1f5f9",
+                            width:22, textAlign:"right", flexShrink:0 }}>{thisWk}</span>
                         </div>
-                        <span style={{ fontSize:12, fontWeight:600, ...S.mono, color:"#f1f5f9",
-                          width:20, textAlign:"right", flexShrink:0 }}>{thisWk}</span>
-                        {pct !== null
-                          ? <span style={{ fontSize:10, fontWeight:600, ...S.mono, width:38,
-                              textAlign:"right", flexShrink:0,
-                              color: pct > 0 ? "#f87171" : "#4ade80" }}>
-                              {pct > 0 ? "↑" : "↓"}{Math.abs(pct).toFixed(0)}%
-                            </span>
-                          : <span style={{ width:38, flexShrink:0 }} />}
-                      </div>
-                    ))
-                  })()}
-                </div>
+                      ))}
+                      {disputeWeekStats && disputeWeekStats.disputed > 0 && (<>
+                        <div style={{ height:1, background:"#1e293b", margin:"4px 0" }} />
+                        {[
+                          { label:"Disputed",   value:disputeWeekStats.disputed,   color:"#F59E0B" },
+                          { label:"Accepted",   value:disputeWeekStats.accepted,   color:"#22C55E" },
+                          { label:"Redelivered",value:disputeWeekStats.redelivered,color:"#3B82F6" },
+                        ].filter(d => d.value > 0).map(({ label, value, color }) => (
+                          <div key={label} style={{ display:"flex", alignItems:"center", gap:8 }}>
+                            <span style={{ fontSize:11, color:"#64748b", width:78, flexShrink:0 }}>{label}</span>
+                            <div style={{ flex:1, height:5, background:"#1e293b", borderRadius:2, overflow:"hidden" }}>
+                              <div style={{ width:`${value/maxVal*100}%`, height:"100%",
+                                background:color, borderRadius:2, opacity:0.7 }} />
+                            </div>
+                            <span style={{ fontSize:12, fontWeight:600, ...S.mono, color:"#94a3b8",
+                              width:22, textAlign:"right", flexShrink:0 }}>{value}</span>
+                          </div>
+                        ))}
+                      </>)}
+                    </div>
+                  )
+                })()}
               </div>
 
-              {/* Rejections per week mini chart */}
-              {sortedWeeks.length > 1 && (
-                <div style={S.card}>
-                  <p style={{ ...S.label, marginBottom:10 }}>Rejections per week</p>
-                  <ResponsiveContainer width="100%" height={130}>
-                    <LineChart data={chartData} margin={{ top:0, right:8, left:-20, bottom:0 }}>
+              {/* Combined time series */}
+              <div style={S.card}>
+                <p style={{ ...S.label, marginBottom:14 }}>Rejections, disputes & accepted</p>
+                {sortedWeeks.length > 1 ? (
+                  <ResponsiveContainer width="100%" height={160}>
+                    <LineChart data={combinedChartData} margin={{ top:0, right:8, left:-20, bottom:0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                       <XAxis dataKey="week" tick={{ fontSize:9, fill:"#475569", fontFamily:"DM Mono" }} />
                       <YAxis tick={{ fontSize:9, fill:"#475569", fontFamily:"DM Mono" }} />
                       <Tooltip content={<ChartTooltip />} />
-                      <Line type="monotone" dataKey="rejections" stroke="#3B82F6" strokeWidth={2}
-                        dot={{ r:2, fill:"#3B82F6" }} name="Rejections" />
+                      <Legend iconSize={8} wrapperStyle={{ fontSize:10, color:"#64748b", fontFamily:"DM Sans" }} />
+                      <Line type="monotone" dataKey="Rejections" stroke="#3B82F6" strokeWidth={2}
+                        dot={{ r:2, fill:"#3B82F6" }} connectNulls />
+                      <Line type="monotone" dataKey="Disputes"   stroke="#F59E0B" strokeWidth={2}
+                        dot={{ r:2, fill:"#F59E0B" }} connectNulls />
+                      <Line type="monotone" dataKey="Accepted"   stroke="#22C55E" strokeWidth={2}
+                        dot={{ r:2, fill:"#22C55E" }} connectNulls />
                     </LineChart>
                   </ResponsiveContainer>
-                </div>
-              )}
+                ) : (
+                  <p style={{ fontSize:12, color:"#334155", textAlign:"center", padding:"40px 0" }}>
+                    Load more weeks to see trends
+                  </p>
+                )}
+                {OMIT_DISPUTE_WEEKS.some(wk => sortedWeeks.includes(wk)) && (
+                  <p style={{ fontSize:10, color:"#334155", marginTop:10 }}>
+                    * Dispute data unavailable for {OMIT_DISPUTE_LABELS.filter((_, i) => sortedWeeks.includes(OMIT_DISPUTE_WEEKS[i])).join(", ")} — excluded from dispute analysis
+                  </p>
+                )}
+              </div>
             </div>
 
-            {/* ── Right: Dispute Management ── */}
-            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <div style={{ width:3, height:13, borderRadius:2, background:"#F59E0B", flexShrink:0 }} />
-                <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", color:"#F59E0B" }}>
-                  Dispute Management
-                </span>
-                <div style={{ flex:1, height:1, background:"#1e293b" }} />
+            {/* Disputes this week */}
+            <div style={{ ...S.card, borderColor:"rgba(245,158,11,0.2)" }}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
+                <p style={{ ...S.label }}>Disputes this week — {fmtWeek(tableWk)}</p>
+                <button onClick={() => setPage("disputes")}
+                  style={{ fontSize:11, color:"#F59E0B", background:"rgba(245,158,11,0.08)",
+                    border:"1px solid rgba(245,158,11,0.25)", padding:"4px 12px", borderRadius:6,
+                    cursor:"pointer", fontFamily:"'DM Sans',sans-serif", fontWeight:600 }}>
+                  See all disputes →
+                </button>
               </div>
 
               {disputeWeekStats ? (<>
-
-                {/* Compact KPI grid */}
-                <div style={{ ...S.card, borderColor:"rgba(245,158,11,0.2)" }}>
-                  <p style={{ ...S.label, marginBottom:10 }}>Summary — {fmtWeek(tableWk)}</p>
-                  <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:8 }}>
-                    {[
-                      { label:"Content ID",   value:disputeWeekStats.contentIdCount },
-                      { label:"Disputed",     value:disputeWeekStats.disputed },
-                      { label:"Accepted",     value:disputeWeekStats.accepted },
-                      { label:"Redelivered",  value:disputeWeekStats.redelivered },
-                      { label:"Verified",     value:disputeWeekStats.verifiedArtists },
-                      { label:"Accept Rate",
-                        value: disputeWeekStats.disputed > 0
-                          ? `${(disputeWeekStats.accepted/disputeWeekStats.disputed*100).toFixed(0)}%` : "—",
-                        isText:true },
-                      { label:"Accepted/CID",
-                        value: disputeWeekStats.contentIdCount > 0
-                          ? `${(disputeWeekStats.accepted/disputeWeekStats.contentIdCount*100).toFixed(0)}%` : "—",
-                        isText:true },
-                    ].map(({ label, value, isText }) => (
-                      <div key={label} style={{ background:"#0a1120", borderRadius:7, padding:"9px 10px" }}>
-                        <p style={{ fontSize:9, fontWeight:700, letterSpacing:"0.07em", textTransform:"uppercase",
-                          color:"#475569", marginBottom:3 }}>{label}</p>
-                        <p style={{ fontSize:18, fontWeight:700, ...S.mono, color:"#f1f5f9",
-                          letterSpacing:"-0.02em" }}>
-                          {isText ? value : fmtN(value)}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Dispute rates chart */}
-                {hasDisputeChartData && sortedWeeks.length > 1 && (
-                  <div style={{ ...S.card, borderColor:"rgba(245,158,11,0.2)" }}>
-                    <p style={{ ...S.label, marginBottom:10 }}>Dispute rates over time</p>
-                    <ResponsiveContainer width="100%" height={130}>
-                      <LineChart data={disputePctChartData} margin={{ top:0, right:8, left:-14, bottom:0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                        <XAxis dataKey="week" tick={{ fontSize:9, fill:"#475569", fontFamily:"DM Mono" }} />
-                        <YAxis tick={{ fontSize:9, fill:"#475569", fontFamily:"DM Mono" }}
-                          tickFormatter={v => `${v}%`} />
-                        <Tooltip content={<DisputePctTooltip />} />
-                        <Legend iconSize={8} wrapperStyle={{ fontSize:9, color:"#64748b", fontFamily:"DM Sans" }} />
-                        <Line type="monotone" dataKey="Disputed %" stroke="#F59E0B" strokeWidth={2}
-                          dot={{ r:2, fill:"#F59E0B" }} connectNulls />
-                        <Line type="monotone" dataKey="Accepted %" stroke="#22C55E" strokeWidth={2}
-                          strokeDasharray="5 3" dot={{ r:2, fill:"#22C55E" }} connectNulls />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-
-                {/* Condensed dispute detail */}
-                {disputeWeekStats.disputes.length > 0 && (
-                  <div style={{ ...S.card, borderColor:"rgba(245,158,11,0.2)" }}>
-                    <p style={{ ...S.label, marginBottom:10 }}>
-                      Disputes this week ({disputeWeekStats.disputes.length})
-                    </p>
-                    <div style={{ overflowY:"auto", maxHeight:140 }}>
-                      <table style={{ width:"100%", borderCollapse:"collapse" }}>
-                        <tbody>
-                          {disputeWeekStats.disputes.map(({ artist, title, disputed, accepted, redelivered, note }, i) => (
-                            <tr key={i} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
-                              <td style={{ padding:"6px 8px", verticalAlign:"top" }}>
-                                <p style={{ fontSize:11, color:"#cbd5e1", fontWeight:500,
-                                  overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
-                                  maxWidth:140 }}>{artist || "—"}</p>
-                                {title && <p style={{ fontSize:10, color:"#475569", ...S.mono,
-                                  overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
-                                  maxWidth:140 }}>{title}</p>}
-                              </td>
-                              <td style={{ padding:"6px 8px", verticalAlign:"middle", whiteSpace:"nowrap" }}>
-                                <div style={{ display:"flex", gap:4 }}>
-                                  {disputed    && <span style={{ fontSize:10, fontWeight:700, padding:"1px 5px",
-                                    borderRadius:3, background:"rgba(245,158,11,0.15)", color:"#F59E0B" }}>D</span>}
-                                  {accepted    && <span style={{ fontSize:10, fontWeight:700, padding:"1px 5px",
-                                    borderRadius:3, background:"rgba(34,197,94,0.15)",  color:"#22C55E" }}>A</span>}
-                                  {redelivered && <span style={{ fontSize:10, fontWeight:700, padding:"1px 5px",
-                                    borderRadius:3, background:"rgba(59,130,246,0.15)", color:"#3B82F6" }}>R</span>}
-                                </div>
-                              </td>
-                              {note && (
-                                <td style={{ padding:"6px 8px", fontSize:10, color:"#64748b",
-                                  verticalAlign:"top", lineHeight:1.6, maxWidth:240 }}>{note}</td>
-                              )}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                {/* KPI mini-row */}
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:8, marginBottom:16 }}>
+                  {[
+                    { label:"Content ID",  value:disputeWeekStats.contentIdCount },
+                    { label:"Disputed",    value:disputeWeekStats.disputed },
+                    { label:"Accepted",    value:disputeWeekStats.accepted },
+                    { label:"Redelivered", value:disputeWeekStats.redelivered },
+                    { label:"Verified",    value:disputeWeekStats.verifiedArtists },
+                    { label:"Accept Rate",
+                      value: disputeWeekStats.disputed > 0
+                        ? `${(disputeWeekStats.accepted/disputeWeekStats.disputed*100).toFixed(0)}%` : "—",
+                      isText:true },
+                    { label:"Accepted/CID",
+                      value: disputeWeekStats.contentIdCount > 0
+                        ? `${(disputeWeekStats.accepted/disputeWeekStats.contentIdCount*100).toFixed(0)}%` : "—",
+                      isText:true },
+                  ].map(({ label, value, isText }) => (
+                    <div key={label} style={{ background:"#0a1120", borderRadius:7, padding:"8px 10px" }}>
+                      <p style={{ fontSize:9, fontWeight:700, letterSpacing:"0.07em", textTransform:"uppercase",
+                        color:"#475569", marginBottom:3 }}>{label}</p>
+                      <p style={{ fontSize:17, fontWeight:700, ...S.mono, color:"#f1f5f9",
+                        letterSpacing:"-0.02em" }}>{isText ? value : fmtN(value)}</p>
                     </div>
+                  ))}
+                </div>
+
+                {/* Dispute detail rows */}
+                {disputeWeekStats.disputes.length > 0 && (
+                  <div style={{ overflowY:"auto", maxHeight:180 }}>
+                    <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                      <thead>
+                        <tr style={{ borderBottom:"1px solid #1e293b" }}>
+                          {["Artist / Title","Status","Notes"].map(h => (
+                            <th key={h} style={{ ...S.label, textAlign:"left", padding:"0 10px 8px",
+                              fontWeight:600, whiteSpace:"nowrap", fontSize:9 }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {disputeWeekStats.disputes.map(({ artist, title, disputed, accepted, redelivered, note }, i) => (
+                          <tr key={i} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
+                            <td style={{ padding:"7px 10px", verticalAlign:"top", maxWidth:160 }}>
+                              <p style={{ fontSize:12, color:"#cbd5e1", fontWeight:500,
+                                overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{artist || "—"}</p>
+                              {title && <p style={{ fontSize:10, color:"#475569", ...S.mono,
+                                overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{title}</p>}
+                            </td>
+                            <td style={{ padding:"7px 10px", verticalAlign:"top", whiteSpace:"nowrap" }}>
+                              <div style={{ display:"flex", gap:4 }}>
+                                {disputed    && <span style={{ fontSize:10, fontWeight:700, padding:"1px 6px", borderRadius:3,
+                                  background:"rgba(245,158,11,0.15)", color:"#F59E0B" }}>D</span>}
+                                {accepted    && <span style={{ fontSize:10, fontWeight:700, padding:"1px 6px", borderRadius:3,
+                                  background:"rgba(34,197,94,0.15)",  color:"#22C55E" }}>A</span>}
+                                {redelivered && <span style={{ fontSize:10, fontWeight:700, padding:"1px 6px", borderRadius:3,
+                                  background:"rgba(59,130,246,0.15)", color:"#3B82F6" }}>R</span>}
+                              </div>
+                            </td>
+                            <td style={{ padding:"7px 10px", fontSize:11, color:"#64748b",
+                              verticalAlign:"top", lineHeight:1.6 }}>{note || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
-
               </>) : (
-                <div style={{ ...S.card, borderColor:"rgba(245,158,11,0.15)", padding:"24px 20px", textAlign:"center" }}>
-                  <p style={{ fontSize:12, color:"#334155" }}>No dispute data for {fmtWeek(tableWk)}</p>
-                </div>
+                <p style={{ fontSize:12, color:"#334155" }}>
+                  {OMIT_DISPUTE_WEEKS.includes(tableWk)
+                    ? `Dispute data unavailable for ${fmtWeek(tableWk)}`
+                    : `No dispute data for ${fmtWeek(tableWk)}`}
+                </p>
               )}
             </div>
-          </div>
 
+          </>)}
         </>)}
 
-        {/* ════════════ DETAIL PAGE ════════════ */}
-        {page === "detail" && hasData && tableWkStats && (<>
+        {/* ════ ALL DISPUTES PAGE ════ */}
+        {page === "disputes" && (() => {
+          const disputed   = allDisputeRows.filter(r => r.disputed)
+          const accepted   = allDisputeRows.filter(r => r.accepted)
+          const redelivered = allDisputeRows.filter(r => r.redelivered)
 
-          {/* Week selector on detail page */}
-          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-            <span style={S.label}>Week</span>
-            <select value={tableWk ?? ""} onChange={e => setSelectedWk(e.target.value)}
-              style={{ background:"#0a1120", border:"1px solid #1e293b", borderRadius:7,
-                padding:"5px 10px", fontSize:12, color:"#cbd5e1", cursor:"pointer",
-                fontFamily:"'DM Mono',monospace", outline:"none", colorScheme:"dark" }}>
-              {[...sortedWeeks].reverse().map(wk => (
-                <option key={wk} value={wk}>{fmtWeek(wk)}{wk === latestWk ? " (latest)" : ""}</option>
-              ))}
-            </select>
-          </div>
-
-          {sortedWeeks.length > 1 && (
-            <div style={S.card}>
-              <p style={{ ...S.label, marginBottom:14 }}>Rejections per week</p>
-              <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={chartData} margin={{ top:0, right:8, left:-20, bottom:0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis dataKey="week" tick={{ fontSize:10, fill:"#475569", fontFamily:"DM Mono" }} />
-                  <YAxis tick={{ fontSize:10, fill:"#475569", fontFamily:"DM Mono" }} />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Line type="monotone" dataKey="rejections" stroke="#3B82F6" strokeWidth={2}
-                    dot={{ r:2, fill:"#3B82F6" }} name="Rejections" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {sortedWeeks.length > 1 && (
-            <div style={S.card}>
-              <p style={{ ...S.label, marginBottom:4 }}>Category breakdown — all time</p>
-              <p style={{ fontSize:11, color:"#334155", marginBottom:14, ...S.mono }}>
-                This week = {fmtWeek(tableWk)}{prevTableWk ? ` · vs ${fmtWeek(prevTableWk)}` : ""}
-              </p>
-              <div style={{ overflowX:"auto" }}>
-                <table style={{ width:"100%", borderCollapse:"collapse" }}>
-                  <thead>
-                    <tr style={{ borderBottom:"1px solid #1e293b" }}>
-                      {["Category","Total","Avg / wk","Max","This week","vs last wk"].map((h, i) => (
-                        <th key={h} style={{ ...S.label, textAlign:i===0?"left":"right",
-                          padding:"0 10px 10px", fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {categoryTableData.map(({ c, total, avg, maxVal, maxWk, thisWk, prevVal, pct }) => (
-                      <tr key={c} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
-                        <td style={{ padding:"10px 10px" }}>
-                          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                            <div style={{ width:8, height:8, borderRadius:"50%", background:CAT_COLORS[c], flexShrink:0 }} />
-                            <span style={{ fontSize:12, color:"#cbd5e1" }}>{CAT_SHORT[c]}</span>
-                          </div>
-                        </td>
-                        <td style={{ textAlign:"right", padding:"10px 10px", fontSize:13, fontWeight:600, ...S.mono, color:"#f1f5f9" }}>{fmtN(total)}</td>
-                        <td style={{ textAlign:"right", padding:"10px 10px", fontSize:12, ...S.mono, color:"#64748b" }}>{avg.toFixed(1)}</td>
-                        <td style={{ textAlign:"right", padding:"10px 10px", ...S.mono }}>
-                          <span style={{ fontSize:12, color:"#f1f5f9", fontWeight:600 }}>{fmtN(maxVal)}</span>
-                          <span style={{ fontSize:10, color:"#334155", display:"block" }}>{fmtWeek(maxWk)}</span>
-                        </td>
-                        <td style={{ textAlign:"right", padding:"10px 10px", fontSize:13, fontWeight:600, ...S.mono, color:"#f1f5f9" }}>{fmtN(thisWk)}</td>
-                        <td style={{ textAlign:"right", padding:"10px 10px" }}>
-                          {prevTableWk == null
-                            ? <span style={{ fontSize:11, color:"#334155", ...S.mono }}>—</span>
-                            : pct === null
-                              ? <span style={{ fontSize:11, color:"#475569", ...S.mono }}>{thisWk > 0 && prevVal === 0 ? "new" : "—"}</span>
-                              : <span style={{ display:"inline-flex", alignItems:"center", gap:3, fontSize:11,
-                                  fontWeight:600, ...S.mono,
-                                  color: pct > 0 ? "#f87171" : pct < 0 ? "#4ade80" : "#64748b",
-                                  background: pct > 0 ? "rgba(248,113,113,.12)" : pct < 0 ? "rgba(74,222,128,.12)" : "transparent",
-                                  padding:"2px 7px", borderRadius:4 }}>
-                                  {pct > 0 ? "↑" : pct < 0 ? "↓" : ""} {Math.abs(pct).toFixed(1)}%
-                                </span>}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* UPC / ISRC breakdown */}
-          <div style={S.card}>
-            <p style={{ ...S.label, marginBottom:4 }}>UPC / ISRC breakdown — {fmtWeek(tableWk)}</p>
-            <p style={{ fontSize:11, color:"#334155", marginBottom:16 }}>{latestWeekRows.length} rejected products</p>
+          const DisputeTable = ({ rows }) => (
             <div style={{ overflowX:"auto" }}>
-                <table style={{ width:"100%", borderCollapse:"collapse", minWidth:560 }}>
-                  <thead>
-                    <tr style={{ borderBottom:"1px solid #1e293b" }}>
-                      {["UPC","ISRC(s)","Issue Types (Product / Asset)"].map(h => (
-                        <th key={h} style={{ ...S.label, textAlign:"left", padding:"0 10px 10px",
-                          fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {latestWeekRows.map(({ upc, isrcs, prodCats, assetCats }, i) => (
-                      <tr key={i} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
-                        <td style={{ padding:"10px 10px", fontSize:12, ...S.mono, color:"#94a3b8",
-                          whiteSpace:"nowrap", verticalAlign:"top" }}>{upc || "—"}</td>
-                        <td style={{ padding:"10px 10px", verticalAlign:"top", maxWidth:200 }}>
-                          {isrcs.length
-                            ? <span style={{ fontSize:11, ...S.mono, color:"#64748b", lineHeight:1.7 }}>{isrcs.join(", ")}</span>
-                            : <span style={{ fontSize:11, color:"#334155" }}>—</span>}
-                        </td>
-                        <td style={{ padding:"10px 10px", verticalAlign:"top" }}>
-                          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                            {prodCats.length > 0 && (
-                              <div style={{ display:"flex", alignItems:"flex-start", gap:6, flexWrap:"wrap" }}>
-                                <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase",
-                                  color:"#475569", paddingTop:3, whiteSpace:"nowrap", flexShrink:0 }}>Product</span>
-                                <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
-                                  {prodCats.map(c => (
-                                    <span key={c} style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
-                                      background:`${CAT_COLORS[c]}18`, color:CAT_COLORS[c],
-                                      border:`1px solid ${CAT_COLORS[c]}40` }}>{CAT_SHORT[c]}</span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            {assetCats.length > 0 && (
-                              <div style={{ display:"flex", alignItems:"flex-start", gap:6, flexWrap:"wrap" }}>
-                                <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase",
-                                  color:"#475569", paddingTop:3, whiteSpace:"nowrap", flexShrink:0 }}>Asset</span>
-                                <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
-                                  {assetCats.map(c => (
-                                    <span key={c} style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
-                                      background:`${CAT_COLORS[c]}18`, color:CAT_COLORS[c],
-                                      border:`1px solid ${CAT_COLORS[c]}40` }}>{CAT_SHORT[c]}</span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
+              <table style={{ width:"100%", borderCollapse:"collapse", minWidth:600 }}>
+                <thead>
+                  <tr style={{ borderBottom:"1px solid #1e293b" }}>
+                    {["UPC","Date","Artist / Title","Status","Notes"].map(h => (
+                      <th key={h} style={{ ...S.label, textAlign:"left", padding:"0 12px 10px",
+                        fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
                     ))}
-                  </tbody>
-                </table>
-                {latestWeekRows.length === 0 && (
-                  <p style={{ fontSize:12, color:"#334155", textAlign:"center", padding:"28px 0" }}>
-                    No data for {fmtWeek(tableWk)}
-                  </p>
-                )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(({ upc, weekLabel, artist, title, disputed, accepted, redelivered, note }, i) => (
+                    <tr key={i} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
+                      <td style={{ padding:"10px 12px", fontSize:12, ...S.mono, color:"#94a3b8",
+                        whiteSpace:"nowrap", verticalAlign:"top" }}>{upc || "—"}</td>
+                      <td style={{ padding:"10px 12px", fontSize:11, ...S.mono, color:"#64748b",
+                        whiteSpace:"nowrap", verticalAlign:"top" }}>{weekLabel}</td>
+                      <td style={{ padding:"10px 12px", verticalAlign:"top", maxWidth:200 }}>
+                        <p style={{ fontSize:13, color:"#cbd5e1", fontWeight:500 }}>{artist || "—"}</p>
+                        {title && <p style={{ fontSize:11, color:"#475569", ...S.mono, marginTop:2 }}>{title}</p>}
+                      </td>
+                      <td style={{ padding:"10px 12px", verticalAlign:"top", whiteSpace:"nowrap" }}>
+                        <div style={{ display:"flex", gap:4 }}>
+                          {disputed    && <span style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
+                            background:"rgba(245,158,11,0.12)", color:"#F59E0B", border:"1px solid rgba(245,158,11,0.3)" }}>Disputed</span>}
+                          {accepted    && <span style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
+                            background:"rgba(34,197,94,0.12)",  color:"#22C55E", border:"1px solid rgba(34,197,94,0.3)"  }}>Accepted</span>}
+                          {redelivered && <span style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
+                            background:"rgba(59,130,246,0.12)", color:"#3B82F6", border:"1px solid rgba(59,130,246,0.3)" }}>Redelivered</span>}
+                        </div>
+                      </td>
+                      <td style={{ padding:"10px 12px", fontSize:12, color:"#94a3b8",
+                        verticalAlign:"top", lineHeight:1.6, maxWidth:300 }}>
+                        {note || <span style={{ color:"#334155" }}>—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                  {rows.length === 0 && (
+                    <tr><td colSpan={5} style={{ padding:"28px 12px", fontSize:12, color:"#334155", textAlign:"center" }}>None</td></tr>
+                  )}
+                </tbody>
+              </table>
             </div>
+          )
+
+          return (<>
+            {[
+              { title:"Disputed", color:"#F59E0B", rows:disputed },
+              { title:"Accepted Disputes", color:"#22C55E", rows:accepted },
+              { title:"Redelivered", color:"#3B82F6", rows:redelivered },
+            ].map(({ title, color, rows }) => (
+              <div key={title} style={{ ...S.card, borderColor:`${color}22` }}>
+                <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
+                  <div style={{ width:3, height:14, borderRadius:2, background:color, flexShrink:0 }} />
+                  <span style={{ fontSize:13, fontWeight:700, color:"#f1f5f9" }}>{title}</span>
+                  <span style={{ fontSize:11, color:"#475569", ...S.mono }}>({rows.length})</span>
+                </div>
+                <DisputeTable rows={rows} />
+              </div>
+            ))}
+          </>)
+        })()}
+
+        {/* ════ HISTORY PAGE ════ */}
+        {page === "history" && (<>
+          <div onDrop={handleDrop}
+            onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
+            onDragLeave={() => setIsDragging(false)}
+            style={{ border:`1.5px dashed ${isDragging?"#3B82F6":"#1e293b"}`,
+              background:isDragging?"rgba(59,130,246,0.06)":"#0a1120",
+              borderRadius:10, padding:"14px 20px", textAlign:"center", transition:"all 0.2s ease" }}>
+            <span style={{ color:isDragging?"#93c5fd":"#475569", fontSize:12 }}>
+              {isDragging ? "Drop to load" : "Drop a CSV to add"}
+            </span>
           </div>
-
-        </>)}
-
-        {/* ════════════ HISTORY PAGE ════════════ */}
-        {page === "history" && (
           <div style={S.card}>
-            <p style={{ ...S.label, marginBottom:16 }}>Upload history</p>
+            <p style={{ ...S.label, marginBottom:14 }}>Upload history</p>
             {processedFiles.length === 0 ? (
-              <p style={{ fontSize:12, color:"#334155", textAlign:"center", padding:"24px 0" }}>No files uploaded yet</p>
+              <p style={{ fontSize:12, color:"#334155", textAlign:"center", padding:"20px 0" }}>No files yet</p>
             ) : (
               <div style={{ display:"flex", flexDirection:"column" }}>
                 {[...processedFiles].reverse().map((f, i) => (
                   <div key={i} className="row-hover" style={{ display:"flex", alignItems:"center",
-                    justifyContent:"space-between", padding:"10px 8px", borderBottom:"1px solid #0f172a" }}>
+                    justifyContent:"space-between", padding:"9px 8px", borderBottom:"1px solid #0f172a" }}>
                     <div style={{ display:"flex", alignItems:"center", gap:10, minWidth:0 }}>
-                      <button onClick={() => { setSelectedFile(f); setPage("file") }}
-                        style={{ fontSize:12, color:"#3B82F6", background:"transparent", border:"none",
-                          cursor:"pointer", fontFamily:"'DM Sans',sans-serif", fontWeight:500,
-                          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
-                          textAlign:"left", padding:0 }}>{f.name}</button>
+                      <span style={{ fontSize:12, color:"#94a3b8", fontWeight:500,
+                        overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{f.name}</span>
                       <span style={{ fontSize:11, color:"#334155", ...S.mono, flexShrink:0 }}>
                         {f.manual_date ? `${fmtDate(f.manual_date)} report` : f.date_range}
+                        {" · "}{fmtN(f.rows)} rows
                       </span>
                     </div>
-                    <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
-                      <span style={{ fontSize:11, color:"#334155", ...S.mono }}>
-                        {fmtN(f.rows)} rows · {new Date(f.uploaded_at).toLocaleDateString()}
-                      </span>
-                      <div style={{ display:"flex", gap:6 }}>
-                        {f.csv_content && (
-                          <button className="dl-btn" onClick={() => handleDownload(f)} style={{
-                            display:"flex", alignItems:"center", gap:4, fontSize:11, color:"#3B82F6",
-                            background:"rgba(59,130,246,0.08)", border:"1px solid rgba(59,130,246,0.2)",
-                            padding:"3px 9px", borderRadius:5, cursor:"pointer",
-                            fontFamily:"'DM Sans',sans-serif", transition:"all 0.15s", whiteSpace:"nowrap" }}>
-                            <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-                            </svg>
-                            Download
-                          </button>
-                        )}
-                        <button onClick={() => handleDeleteFile(f)} style={{
-                          display:"flex", alignItems:"center", gap:4, fontSize:11, color:"#ef4444",
-                          background:"rgba(239,68,68,0.08)", border:"1px solid rgba(239,68,68,0.2)",
+                    <div style={{ display:"flex", gap:6, flexShrink:0 }}>
+                      {f.csv_content && (
+                        <button className="dl-btn" onClick={() => handleDownload(f)} style={{
+                          display:"flex", alignItems:"center", gap:4, fontSize:11, color:"#3B82F6",
+                          background:"rgba(59,130,246,0.08)", border:"1px solid rgba(59,130,246,0.2)",
                           padding:"3px 9px", borderRadius:5, cursor:"pointer",
-                          fontFamily:"'DM Sans',sans-serif", transition:"all 0.15s", whiteSpace:"nowrap" }}>
+                          fontFamily:"'DM Sans',sans-serif", transition:"all 0.15s" }}>
                           <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
                           </svg>
-                          Remove
+                          Download
                         </button>
-                      </div>
+                      )}
+                      <button onClick={() => handleDeleteFile(f)} style={{
+                        display:"flex", alignItems:"center", gap:4, fontSize:11, color:"#ef4444",
+                        background:"rgba(239,68,68,0.08)", border:"1px solid rgba(239,68,68,0.2)",
+                        padding:"3px 9px", borderRadius:5, cursor:"pointer",
+                        fontFamily:"'DM Sans',sans-serif", transition:"all 0.15s" }}>
+                        <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                        </svg>
+                        Remove
+                      </button>
                     </div>
                   </div>
                 ))}
               </div>
             )}
           </div>
-        )}
-
-        {/* ════════════ FILE PREVIEW PAGE ════════════ */}
-        {page === "file" && selectedFile && (<>
-          <div style={{ ...S.card, padding:"14px 20px" }}>
-            <p style={{ fontSize:14, fontWeight:600, color:"#f1f5f9", marginBottom:4 }}>{selectedFile.name}</p>
-            <p style={{ fontSize:11, color:"#475569", ...S.mono }}>
-              {selectedFile.manual_date ? `${fmtDate(selectedFile.manual_date)} report` : selectedFile.date_range}
-              {" · "}{fmtN(selectedFile.rows)} rows · uploaded {new Date(selectedFile.uploaded_at).toLocaleDateString()}
-            </p>
-          </div>
-          {filePreviewRows.length > 0 ? (
-            <div style={S.card}>
-              <p style={{ ...S.label, marginBottom:12 }}>
-                {fmtN(filePreviewRows.length)} rows
-              </p>
-              <div style={{ overflowX:"auto" }}>
-                <table style={{ borderCollapse:"collapse", fontSize:11 }}>
-                  <thead>
-                    <tr style={{ borderBottom:"1px solid #1e293b" }}>
-                      {Object.keys(filePreviewRows[0]).map(h => (
-                        <th key={h} style={{ ...S.label, textAlign:"left", padding:"0 12px 8px",
-                          whiteSpace:"nowrap", fontSize:9, fontWeight:700 }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filePreviewRows.map((row, i) => (
-                      <tr key={i} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
-                        {Object.values(row).map((val, j) => (
-                          <td key={j} style={{ padding:"6px 12px", ...S.mono, color:"#94a3b8",
-                            whiteSpace:"nowrap", maxWidth:220, overflow:"hidden", textOverflow:"ellipsis" }}>
-                            {String(val).slice(0, 120)}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : (
-            <p style={{ fontSize:12, color:"#334155", textAlign:"center", padding:"24px 0" }}>No preview available</p>
-          )}
         </>)}
 
       </div>
