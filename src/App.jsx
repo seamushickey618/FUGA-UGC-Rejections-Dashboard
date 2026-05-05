@@ -299,6 +299,56 @@ function ChartTooltip({ active, payload, label }) {
   )
 }
 
+function DisputeTable({ rows }) {
+  const monoStyle = { fontFamily:"'DM Mono',monospace" }
+  const labelStyle = { fontSize:11, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", color:"#475569" }
+  return (
+    <div style={{ overflowX:"auto" }}>
+      <table style={{ width:"100%", borderCollapse:"collapse", minWidth:600 }}>
+        <thead>
+          <tr style={{ borderBottom:"1px solid #1e293b" }}>
+            {["UPC","Date","Artist / Title","Status","Notes"].map(h => (
+              <th key={h} style={{ ...labelStyle, textAlign:"left", padding:"0 12px 10px",
+                fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ upc, weekLabel, artist, title, disputed, accepted, redelivered, note }, i) => (
+            <tr key={i} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
+              <td style={{ padding:"10px 12px", fontSize:12, ...monoStyle, color:"#94a3b8",
+                whiteSpace:"nowrap", verticalAlign:"top" }}>{upc || "—"}</td>
+              <td style={{ padding:"10px 12px", fontSize:11, ...monoStyle, color:"#64748b",
+                whiteSpace:"nowrap", verticalAlign:"top" }}>{weekLabel}</td>
+              <td style={{ padding:"10px 12px", verticalAlign:"top", maxWidth:200 }}>
+                <p style={{ fontSize:13, color:"#cbd5e1", fontWeight:500 }}>{artist || "—"}</p>
+                {title && <p style={{ fontSize:11, color:"#475569", ...monoStyle, marginTop:2 }}>{title}</p>}
+              </td>
+              <td style={{ padding:"10px 12px", verticalAlign:"top", whiteSpace:"nowrap" }}>
+                <div style={{ display:"flex", gap:4 }}>
+                  {disputed    && <span style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
+                    background:"rgba(245,158,11,0.12)", color:"#F59E0B", border:"1px solid rgba(245,158,11,0.3)" }}>Disputed</span>}
+                  {accepted    && <span style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
+                    background:"rgba(34,197,94,0.12)",  color:"#22C55E", border:"1px solid rgba(34,197,94,0.3)"  }}>Accepted</span>}
+                  {redelivered && <span style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
+                    background:"rgba(59,130,246,0.12)", color:"#3B82F6", border:"1px solid rgba(59,130,246,0.3)" }}>Redelivered</span>}
+                </div>
+              </td>
+              <td style={{ padding:"10px 12px", fontSize:12, color:"#94a3b8",
+                verticalAlign:"top", lineHeight:1.6, maxWidth:300 }}>
+                {note || <span style={{ color:"#334155" }}>—</span>}
+              </td>
+            </tr>
+          ))}
+          {rows.length === 0 && (
+            <tr><td colSpan={5} style={{ padding:"28px 12px", fontSize:12, color:"#334155", textAlign:"center" }}>None</td></tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function Delta({ curr, prev, invert = false }) {
   if (prev == null || prev === 0) return null
   const pct  = (curr - prev) / prev * 100
@@ -927,42 +977,9 @@ export default function App() {
 
                 {/* Dispute detail rows */}
                 {disputeWeekStats.disputes.length > 0 && (
-                  <div style={{ overflowY:"auto", maxHeight:180 }}>
-                    <table style={{ width:"100%", borderCollapse:"collapse" }}>
-                      <thead>
-                        <tr style={{ borderBottom:"1px solid #1e293b" }}>
-                          {["Artist / Title","Status","Notes"].map(h => (
-                            <th key={h} style={{ ...S.label, textAlign:"left", padding:"0 10px 8px",
-                              fontWeight:600, whiteSpace:"nowrap", fontSize:9 }}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {disputeWeekStats.disputes.map(({ artist, title, disputed, accepted, redelivered, note }, i) => (
-                          <tr key={i} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
-                            <td style={{ padding:"7px 10px", verticalAlign:"top", maxWidth:160 }}>
-                              <p style={{ fontSize:12, color:"#cbd5e1", fontWeight:500,
-                                overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{artist || "—"}</p>
-                              {title && <p style={{ fontSize:10, color:"#475569", ...S.mono,
-                                overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{title}</p>}
-                            </td>
-                            <td style={{ padding:"7px 10px", verticalAlign:"top", whiteSpace:"nowrap" }}>
-                              <div style={{ display:"flex", gap:4 }}>
-                                {disputed    && <span style={{ fontSize:10, fontWeight:700, padding:"1px 6px", borderRadius:3,
-                                  background:"rgba(245,158,11,0.15)", color:"#F59E0B" }}>D</span>}
-                                {accepted    && <span style={{ fontSize:10, fontWeight:700, padding:"1px 6px", borderRadius:3,
-                                  background:"rgba(34,197,94,0.15)",  color:"#22C55E" }}>A</span>}
-                                {redelivered && <span style={{ fontSize:10, fontWeight:700, padding:"1px 6px", borderRadius:3,
-                                  background:"rgba(59,130,246,0.15)", color:"#3B82F6" }}>R</span>}
-                              </div>
-                            </td>
-                            <td style={{ padding:"7px 10px", fontSize:11, color:"#64748b",
-                              verticalAlign:"top", lineHeight:1.6 }}>{note || "—"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  <DisputeTable rows={disputeWeekStats.disputes.map(d => ({
+                    ...d, wk: tableWk, weekLabel: fmtWeek(tableWk)
+                  }))} />
                 )}
               </>) : (
                 <p style={{ fontSize:12, color:"#334155" }}>
@@ -981,52 +998,6 @@ export default function App() {
           const redelivered = allDisputeRows.filter(r => r.redelivered)
           const accepted   = allDisputeRows.filter(r => r.accepted && !r.redelivered)
           const disputed   = allDisputeRows.filter(r => r.disputed && !r.accepted && !r.redelivered)
-
-          const DisputeTable = ({ rows }) => (
-            <div style={{ overflowX:"auto" }}>
-              <table style={{ width:"100%", borderCollapse:"collapse", minWidth:600 }}>
-                <thead>
-                  <tr style={{ borderBottom:"1px solid #1e293b" }}>
-                    {["UPC","Date","Artist / Title","Status","Notes"].map(h => (
-                      <th key={h} style={{ ...S.label, textAlign:"left", padding:"0 12px 10px",
-                        fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map(({ upc, weekLabel, artist, title, disputed, accepted, redelivered, note }, i) => (
-                    <tr key={i} className="row-hover" style={{ borderBottom:"1px solid #0f172a" }}>
-                      <td style={{ padding:"10px 12px", fontSize:12, ...S.mono, color:"#94a3b8",
-                        whiteSpace:"nowrap", verticalAlign:"top" }}>{upc || "—"}</td>
-                      <td style={{ padding:"10px 12px", fontSize:11, ...S.mono, color:"#64748b",
-                        whiteSpace:"nowrap", verticalAlign:"top" }}>{weekLabel}</td>
-                      <td style={{ padding:"10px 12px", verticalAlign:"top", maxWidth:200 }}>
-                        <p style={{ fontSize:13, color:"#cbd5e1", fontWeight:500 }}>{artist || "—"}</p>
-                        {title && <p style={{ fontSize:11, color:"#475569", ...S.mono, marginTop:2 }}>{title}</p>}
-                      </td>
-                      <td style={{ padding:"10px 12px", verticalAlign:"top", whiteSpace:"nowrap" }}>
-                        <div style={{ display:"flex", gap:4 }}>
-                          {disputed    && <span style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
-                            background:"rgba(245,158,11,0.12)", color:"#F59E0B", border:"1px solid rgba(245,158,11,0.3)" }}>Disputed</span>}
-                          {accepted    && <span style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
-                            background:"rgba(34,197,94,0.12)",  color:"#22C55E", border:"1px solid rgba(34,197,94,0.3)"  }}>Accepted</span>}
-                          {redelivered && <span style={{ fontSize:11, fontWeight:600, padding:"2px 7px", borderRadius:4,
-                            background:"rgba(59,130,246,0.12)", color:"#3B82F6", border:"1px solid rgba(59,130,246,0.3)" }}>Redelivered</span>}
-                        </div>
-                      </td>
-                      <td style={{ padding:"10px 12px", fontSize:12, color:"#94a3b8",
-                        verticalAlign:"top", lineHeight:1.6, maxWidth:300 }}>
-                        {note || <span style={{ color:"#334155" }}>—</span>}
-                      </td>
-                    </tr>
-                  ))}
-                  {rows.length === 0 && (
-                    <tr><td colSpan={5} style={{ padding:"28px 12px", fontSize:12, color:"#334155", textAlign:"center" }}>None</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )
 
           return (<>
             {[
